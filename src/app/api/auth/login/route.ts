@@ -49,6 +49,7 @@ export async function POST(request: Request) {
     });
     return res;
   } catch (error: unknown) {
+    console.error("[swoshboard] login failed:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Login failed." },
       { status: 500 }

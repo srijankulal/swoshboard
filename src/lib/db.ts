@@ -6,13 +6,18 @@ export const STORAGE_LIMIT_BYTES =
 export const MAX_FILE_SIZE_BYTES =
   (Number(process.env.MAX_FILE_MB || 10) || 10) * 1024 * 1024;
 
-const dbUrl = process.env.TURSO_DATABASE_URL || "file:./swoshboard.db";
+const dbUrl = process.env.TURSO_DATABASE_URL;
+const authToken = process.env.              ;
+
+if (!dbUrl && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "TURSO_DATABASE_URL is required in production. Local SQLite files (file:) do not work on serverless platforms like Vercel — create a free Turso database and set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN."
+  );
+}
 
 export const db = createClient({
-  url: dbUrl,
-  ...(dbUrl.startsWith("file:") || process.env.TURSO_AUTH_TOKEN
-    ? {}
-    : { authToken: process.env.TURSO_AUTH_TOKEN }),
+  url: dbUrl || "file:./swoshboard.db",
+  ...(authToken ? { authToken } : {}),
 });
 
 export interface UserRow {

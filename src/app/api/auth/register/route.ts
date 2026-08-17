@@ -59,6 +59,7 @@ export async function POST(request: Request) {
     });
     return res;
   } catch (error: unknown) {
+    console.error("[swoshboard] register failed:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Registration failed." },
       { status: 500 }

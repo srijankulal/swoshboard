@@ -20,7 +20,7 @@ Next.js 16 (App Router, TypeScript), Turso (libSQL) for users/sessions/file meta
 ## Setup
 
 1. `npm install`
-2. Get a free Turso database: `https://turso.tech` → create DB → `TURSO_DATABASE_URL` (remote `libsql://...` + `TURSO_AUTH_TOKEN`). For local dev you can skip Turso entirely: the app falls back to a local SQLite file (`file:./swoshboard.db`, auto-created).
+2. Get a free Turso database: `https://turso.tech` → create DB → `TURSO_DATABASE_URL` (remote `libsql://...`) + `TURSO_AUTH_TOKEN`. **Required in production** — Vercel etc. have no persistent filesystem, so without a remote DB the app fails at startup. For local dev you can skip Turso entirely: the app falls back to a local SQLite file (`file:./swoshboard.db`, auto-created).
 3. Cloudinary account → *Settings → API Keys* → paste `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` into `.env`.
 4. Generate a random string for `SWOSH_MASTER_KEY` (encrypts secret passages — changing it breaks password resets for existing users).
 5. Point `SWOSHMAIL_API_URL` / `SWOSHMAIL_API_KEY` at the Swoshmail service (see [`docs/SWOSHMAIL-API.md`](docs/SWOSHMAIL-API.md) for the contract the Swoshmail owner must implement).
