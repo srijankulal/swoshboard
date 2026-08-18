@@ -14,11 +14,11 @@ if (!dbUrl && process.env.NODE_ENV === "production") {
   );
 }
 
-export const db = createClient({
+const client = createClient({
   url: dbUrl || "file:./swoshboard.db",
   ...(authToken ? { authToken } : {}),
 });
-const executeRaw = db.execute.bind(db);
+const executeRaw = client.execute.bind(client);
 let initPromise: Promise<void> | null = null;
 
 export interface UserRow {
@@ -112,10 +112,17 @@ export function ensureDbInitialized(): Promise<void> {
   return initPromise;
 }
 
-db.execute = (async (...args: Parameters<typeof executeRaw>) => {
-  await ensureDbInitialized();
-  return executeRaw(...args);
-}) as typeof db.execute;
+export const db = new Proxy(client, {
+  get(target, prop, receiver) {
+    if (prop === "execute") {
+      return async (...args: Parameters<typeof executeRaw>) => {
+        await ensureDbInitialized();
+        return executeRaw(...args);
+      };
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+}) as typeof client;
 
 export function toUserRow(row: Record<string, unknown>): UserRow {
   return row as unknown as UserRow;
