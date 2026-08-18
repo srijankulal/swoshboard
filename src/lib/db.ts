@@ -7,7 +7,7 @@ export const MAX_FILE_SIZE_BYTES =
   (Number(process.env.MAX_FILE_MB || 10) || 10) * 1024 * 1024;
 
 const dbUrl = process.env.TURSO_DATABASE_URL;
-const authToken = process.env.TURSO_DATABASE_TURSO_AUTH_TOKEN;
+const authToken = process.env.TURSO_AUTH_TOKEN || process.env.TURSO_DATABASE_TURSO_AUTH_TOKEN;
 if (!dbUrl && process.env.NODE_ENV === "production") {
   throw new Error(
     "TURSO_DATABASE_URL is required in production. Local SQLite files (file:) do not work on serverless platforms like Vercel — create a free Turso database and set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN."
@@ -18,6 +18,8 @@ export const db = createClient({
   url: dbUrl || "file:./swoshboard.db",
   ...(authToken ? { authToken } : {}),
 });
+const executeRaw = db.execute.bind(db);
+let initPromise: Promise<void> | null = null;
 
 export interface UserRow {
   id: string;
@@ -50,7 +52,7 @@ export interface FolderRow {
 }
 
 export async function initDb(): Promise<void> {
-  await db.execute(`
+  await executeRaw(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -62,7 +64,7 @@ export async function initDb(): Promise<void> {
       created_at INTEGER NOT NULL
     )
   `);
-  await db.execute(`
+  await executeRaw(`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -70,7 +72,7 @@ export async function initDb(): Promise<void> {
       expires_at INTEGER NOT NULL
     )
   `);
-  await db.execute(`
+  await executeRaw(`
     CREATE TABLE IF NOT EXISTS folders (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -79,7 +81,7 @@ export async function initDb(): Promise<void> {
       created_at INTEGER NOT NULL
     )
   `);
-  await db.execute(`
+  await executeRaw(`
     CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -92,13 +94,28 @@ export async function initDb(): Promise<void> {
     )
   `);
   try {
-    await db.execute(
+    await executeRaw(
       "ALTER TABLE files ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE"
     );
   } catch {
     // column already exists (fresh or already-migrated database)
   }
 }
+
+export function ensureDbInitialized(): Promise<void> {
+  if (!initPromise) {
+    initPromise = initDb().catch((error) => {
+      initPromise = null;
+      throw error;
+    });
+  }
+  return initPromise;
+}
+
+db.execute = (async (...args: Parameters<typeof executeRaw>) => {
+  await ensureDbInitialized();
+  return executeRaw(...args);
+}) as typeof db.execute;
 
 export function toUserRow(row: Record<string, unknown>): UserRow {
   return row as unknown as UserRow;
