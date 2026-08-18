@@ -7,8 +7,7 @@ export const MAX_FILE_SIZE_BYTES =
   (Number(process.env.MAX_FILE_MB || 10) || 10) * 1024 * 1024;
 
 const dbUrl = process.env.TURSO_DATABASE_URL;
-const authToken = process.env.              ;
-
+const authToken = process.env.TURSO_DATABASE_TURSO_AUTH_TOKEN;
 if (!dbUrl && process.env.NODE_ENV === "production") {
   throw new Error(
     "TURSO_DATABASE_URL is required in production. Local SQLite files (file:) do not work on serverless platforms like Vercel — create a free Turso database and set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN."
