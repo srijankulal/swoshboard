@@ -160,6 +160,7 @@ export default function RegisterForm() {
         <div className="auth-footer-links">
           <Link href="/login">Already have an account? Sign in</Link>
           <span className="powered-by">Powered by <span className="powered-by-name">Swoshmail</span></span>
+          <a href="https://github.com/srijankulal" target="_blank" rel="noopener noreferrer" className="github-link">GitHub</a>
         </div>
       </form>
     </div>

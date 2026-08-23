@@ -174,6 +174,7 @@ export default function LoginForm() {
       <div className="auth-footer-links">
         <Link href="/register">Create an account</Link>
         <span className="powered-by">Powered by <span className="powered-by-name">Swoshmail</span></span>
+        <a href="https://github.com/srijankulal" target="_blank" rel="noopener noreferrer" className="github-link">GitHub</a>
       </div>
     </div>
   );

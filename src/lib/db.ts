@@ -7,7 +7,7 @@ export const MAX_FILE_SIZE_BYTES =
   (Number(process.env.MAX_FILE_MB || 10) || 10) * 1024 * 1024;
 
 const dbUrl = process.env.TURSO_DATABASE_URL;
-const authToken = process.env.              ;
+const authToken = process.env.TURSO_AUTH_TOKEN;
 
 if (!dbUrl && process.env.NODE_ENV === "production") {
   throw new Error(

@@ -426,7 +426,7 @@ export default function DashboardClient({ email }: { email: string }) {
 
   const handleDownload = async (file: StoredFile) => {
     try {
-      const res = await fetch(`/api/files/${file.id}/url`);
+      const res = await fetch(`/api/files/${file.id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not prepare download.");
       window.open(data.url, "_blank", "noopener,noreferrer");
@@ -862,6 +862,7 @@ export default function DashboardClient({ email }: { email: string }) {
 
       <footer className="sw-footer">
         <span className="powered-by">Powered by <span className="powered-by-name">Swoshmail</span></span>
+        <a href="https://github.com/srijankulal" target="_blank" rel="noopener noreferrer" className="github-link">GitHub</a>
       </footer>
 
       {(modal === "newFolder" || (modal === "renameFolder" && modalFolder)) && (
