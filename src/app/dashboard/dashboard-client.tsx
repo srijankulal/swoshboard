@@ -429,9 +429,33 @@ export default function DashboardClient({ email }: { email: string }) {
       const res = await fetch(`/api/files/${file.id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not prepare download.");
-      window.open(data.url, "_blank", "noopener,noreferrer");
+      if (data.success && data.url) {
+        // Use window.location to trigger download
+        window.location.href = data.url;
+      } else {
+        throw new Error("Invalid download URL in response");
+      }
     } catch (err) {
       addToast("danger", "Download Failed", err instanceof Error ? err.message : "Unknown error");
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    const selectedFilesList = files.filter((f) => mailSelected.has(f.id));
+    if (selectedFilesList.length === 0) return;
+
+    for (const file of selectedFilesList) {
+      try {
+        const res = await fetch(`/api/files/${file.id}`);
+        const data = await res.json();
+        if (res.ok && data.success && data.url) {
+          // Small delay between downloads to avoid blocking
+          await new Promise(resolve => setTimeout(resolve, 300));
+          window.open(data.url, '_blank');
+        }
+      } catch (err) {
+        addToast("danger", "Download Failed", `Failed to download ${file.name}`);
+      }
     }
   };
 
@@ -613,9 +637,10 @@ export default function DashboardClient({ email }: { email: string }) {
       <header className="dashboard-header glass-panel">
         <div className="logo-group">
           <div className="logo-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: "rotate(-15deg)" }}>
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="9" y1="21" x2="9" y2="9"></line>
             </svg>
           </div>
           <span className="logo-text">Swoshboard</span>
@@ -791,17 +816,24 @@ export default function DashboardClient({ email }: { email: string }) {
                 disabled={mailSelected.size === 0}
                 onClick={() => setMailOpen(true)}
               >
-                ✉ Mail {mailSelected.size > 0 ? `${mailSelected.size} selected file(s)` : "files"} via Swoshmail
+                ✉ Mail {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
+              </button>
+              <button
+                className="btn-secondary"
+                disabled={mailSelected.size === 0}
+                onClick={handleBulkDownload}
+              >
+                ⬇ Download {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
               </button>
               <button
                 className="btn-secondary"
                 disabled={mailSelected.size === 0}
                 onClick={() => { setMoveTarget(null); setModal("moveFiles"); }}
               >
-                Move {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
+                📁 Move {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
               </button>
             </div>
-            <span className="agency-note">Emails are always sent through Swoshmail — nothing else touches your files.</span>
+            <span className="agency-note">Select files with checkboxes • Emails sent via Swoshmail</span>
           </div>
         </section>
 

@@ -26,6 +26,36 @@ export async function destroySession(token: string | undefined): Promise<void> {
 }
 
 export async function getSessionUser(): Promise<UserRow | null> {
+  // Dev mode bypass - return test user if in development
+  if (process.env.NODE_ENV === "development") {
+    const devBypass = process.env.DEV_AUTH_BYPASS;
+    if (devBypass === "true") {
+      const result = await db.execute({
+        sql: "SELECT * FROM users WHERE email = ?",
+        args: ["test@example.com"],
+      });
+      if (result.rows.length > 0) {
+        return toUserRow(result.rows[0] as Record<string, unknown>);
+      }
+      // Create test user if it doesn't exist
+      const testUserId = "dev-test-user";
+      await db.execute({
+        sql: `
+          INSERT OR IGNORE INTO users (id, email, password_hash, secret_passage, terms_accepted_at, failed_attempts, locked_until, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        args: [testUserId, "test@example.com", "dev-bypass", "dev-bypass", new Date().toISOString(), 0, 0, Date.now()],
+      });
+      const newResult = await db.execute({
+        sql: "SELECT * FROM users WHERE id = ?",
+        args: [testUserId],
+      });
+      if (newResult.rows.length > 0) {
+        return toUserRow(newResult.rows[0] as Record<string, unknown>);
+      }
+    }
+  }
+
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
