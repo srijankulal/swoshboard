@@ -32,7 +32,7 @@ export default function TermsPage() {
             Don&apos;t store personal data of other people without their consent.
           </li>
           <li>
-            Swoshmail sends only emails you explicitly initiate; we never read or share your files.
+            Swoshboard sends only emails you explicitly initiate; we never read or share your files.
           </li>
           <li>
             We may remove illegal content and terminate accounts that abuse or damage the service, without
@@ -51,7 +51,7 @@ export default function TermsPage() {
           </li>
         </ul>
         <p>
-          Questions? Ask the Swoshmail owner for help.
+          Questions? Ask the Swoshboard owner for help.
         </p>
       </div>
 

@@ -57,7 +57,7 @@ export default function RegisterForm() {
         </div>
         <h1 className="auth-title">Create your Swoshboard</h1>
         <p className="auth-subtitle">
-          Your own private 200 MB backup space, with files you can email anywhere via Swoshmail.
+          Your own private 200 MB backup space, with files you can email anywhere via Swoshboard.
         </p>
       </div>
 
@@ -129,7 +129,7 @@ export default function RegisterForm() {
                 their consent.
               </li>
               <li>
-                Swoshmail will be used only to send emails you explicitly initiate from your dashboard.
+                Swoshboard will be used only to send emails you explicitly initiate from your dashboard.
               </li>
               <li>
                 We may remove illegal content and terminate the account of anyone abusing the service. No
