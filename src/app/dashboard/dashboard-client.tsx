@@ -217,22 +217,21 @@ export default function DashboardClient({ email }: { email: string }) {
     };
   }, [addToast, router]);
 
-  const fetchClipboard = useCallback(async () => {
-    try {
-      const res = await fetch("/api/clipboard");
-      if (res.ok) {
-        const data = await res.json();
-        setScratchpad(data.scratchpad || "");
-        setClips(data.clips || []);
-        isClipboardLoaded.current = true;
-      }
-    } catch {
-      // silent fallback
-    }
-  }, []);
-
   useEffect(() => {
-    void fetchClipboard();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/clipboard");
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setScratchpad(data.scratchpad || "");
+          setClips(data.clips || []);
+          isClipboardLoaded.current = true;
+        }
+      } catch {
+        // silent fallback
+      }
+    })();
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === "c" || e.key === "C")) {
@@ -241,8 +240,11 @@ export default function DashboardClient({ email }: { email: string }) {
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [fetchClipboard]);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   const handleScratchpadChange = (newVal: string) => {
     setScratchpad(newVal);
@@ -648,7 +650,7 @@ export default function DashboardClient({ email }: { email: string }) {
           await new Promise(resolve => setTimeout(resolve, 300));
           window.open(data.url, '_blank');
         }
-      } catch (err) {
+      } catch {
         addToast("danger", "Download Failed", `Failed to download ${file.name}`);
       }
     }
