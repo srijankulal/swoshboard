@@ -98,6 +98,34 @@ export async function initDb(): Promise<void> {
   } catch {
     // column already exists (fresh or already-migrated database)
   }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS clipboard_scratchpad (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      content TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS clipboard_clips (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_clipboard_clips_user ON clipboard_clips(user_id, created_at DESC)
+  `);
+}
+
+export interface ClipboardClipRow {
+  id: string;
+  user_id: string;
+  title: string | null;
+  content: string;
+  created_at: number;
 }
 
 export function toUserRow(row: Record<string, unknown>): UserRow {

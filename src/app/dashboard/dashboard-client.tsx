@@ -32,6 +32,13 @@ interface Toast {
   message: string;
 }
 
+interface ClipboardClip {
+  id: string;
+  title: string | null;
+  content: string;
+  createdAt: number;
+}
+
 interface PendingUpload {
   file: File;
   folderId: string | null;
@@ -118,6 +125,22 @@ export default function DashboardClient({ email }: { email: string }) {
   const [moving, setMoving] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Clipboard state
+  const [clipboardOpen, setClipboardOpen] = useState(false);
+  const [clipboardTab, setClipboardTab] = useState<"scratchpad" | "clips">("scratchpad");
+  const [scratchpad, setScratchpad] = useState("");
+  const [scratchpadStatus, setScratchpadStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [clips, setClips] = useState<ClipboardClip[]>([]);
+  const [newClipTitle, setNewClipTitle] = useState("");
+  const [newClipContent, setNewClipContent] = useState("");
+  const [clipSearch, setClipSearch] = useState("");
+  const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
+  const [copiedScratchpad, setCopiedScratchpad] = useState(false);
+  const [savingClip, setSavingClip] = useState(false);
+  const isClipboardLoaded = useRef(false);
+  const scratchpadSaveTimer = useRef<NodeJS.Timeout | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadQueue = useRef<PendingUpload[]>([]);
@@ -193,6 +216,178 @@ export default function DashboardClient({ email }: { email: string }) {
       cancelled = true;
     };
   }, [addToast, router]);
+
+  const fetchClipboard = useCallback(async () => {
+    try {
+      const res = await fetch("/api/clipboard");
+      if (res.ok) {
+        const data = await res.json();
+        setScratchpad(data.scratchpad || "");
+        setClips(data.clips || []);
+        isClipboardLoaded.current = true;
+      }
+    } catch {
+      // silent fallback
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchClipboard();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        setClipboardOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [fetchClipboard]);
+
+  const handleScratchpadChange = (newVal: string) => {
+    setScratchpad(newVal);
+    setScratchpadStatus("saving");
+    if (scratchpadSaveTimer.current) {
+      clearTimeout(scratchpadSaveTimer.current);
+    }
+    scratchpadSaveTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/clipboard", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: newVal }),
+        });
+        if (res.ok) {
+          setScratchpadStatus("saved");
+          setTimeout(() => {
+            setScratchpadStatus((prev) => (prev === "saved" ? "idle" : prev));
+          }, 2000);
+        } else {
+          setScratchpadStatus("error");
+        }
+      } catch {
+        setScratchpadStatus("error");
+      }
+    }, 700);
+  };
+
+  const handleCopyScratchpad = async () => {
+    if (!scratchpad) return;
+    try {
+      await navigator.clipboard.writeText(scratchpad);
+      setCopiedScratchpad(true);
+      setTimeout(() => setCopiedScratchpad(false), 2000);
+      addToast("success", "Copied", "Scratchpad copied to clipboard.");
+    } catch {
+      addToast("danger", "Copy failed", "Could not copy to system clipboard.");
+    }
+  };
+
+  const handleClearScratchpad = () => {
+    if (!scratchpad) return;
+    handleScratchpadChange("");
+  };
+
+  const handleSaveScratchpadAsClip = async () => {
+    const content = scratchpad.trim();
+    if (!content) return;
+    setSavingClip(true);
+    try {
+      const firstLine = content.split("\n")[0].trim();
+      const title = firstLine.slice(0, 32) || "Scratchpad Clip";
+      const res = await fetch("/api/clipboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, title }),
+      });
+      const data = await res.json();
+      if (res.ok && data.clip) {
+        setClips((prev) => [data.clip, ...prev]);
+        addToast("success", "Saved Clip", "Scratchpad saved as a new clip.");
+      } else {
+        throw new Error(data.error || "Could not save clip.");
+      }
+    } catch (err) {
+      addToast("danger", "Failed", err instanceof Error ? err.message : "Could not save clip.");
+    } finally {
+      setSavingClip(false);
+    }
+  };
+
+  const handleAddClip = async () => {
+    const content = newClipContent.trim();
+    if (!content) return;
+    setSavingClip(true);
+    try {
+      const res = await fetch("/api/clipboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, title: newClipTitle.trim() || null }),
+      });
+      const data = await res.json();
+      if (res.ok && data.clip) {
+        setClips((prev) => [data.clip, ...prev]);
+        setNewClipTitle("");
+        setNewClipContent("");
+        addToast("success", "Clip Saved", "Added to your saved clips.");
+      } else {
+        throw new Error(data.error || "Could not save clip.");
+      }
+    } catch (err) {
+      addToast("danger", "Failed", err instanceof Error ? err.message : "Could not save clip.");
+    } finally {
+      setSavingClip(false);
+    }
+  };
+
+  const handleCopyClip = async (clip: ClipboardClip) => {
+    try {
+      await navigator.clipboard.writeText(clip.content);
+      setCopiedClipId(clip.id);
+      setTimeout(() => setCopiedClipId((id) => (id === clip.id ? null : id)), 2000);
+      addToast("success", "Copied", `"${clip.title || "Clip"}" copied to clipboard.`);
+    } catch {
+      addToast("danger", "Copy failed", "Could not copy to system clipboard.");
+    }
+  };
+
+  const handleDeleteClip = async (id: string) => {
+    try {
+      const res = await fetch(`/api/clipboard/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setClips((prev) => prev.filter((c) => c.id !== id));
+        addToast("success", "Deleted", "Clip removed.");
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Could not delete clip.");
+      }
+    } catch (err) {
+      addToast("danger", "Delete failed", err instanceof Error ? err.message : "Could not delete clip.");
+    }
+  };
+
+  const handleSendClipToScratchpad = (clip: ClipboardClip) => {
+    const separator = scratchpad.trim() ? "\n\n" : "";
+    const updated = scratchpad + separator + clip.content;
+    handleScratchpadChange(updated);
+    setClipboardTab("scratchpad");
+    addToast("success", "Appended", "Appended clip to scratchpad.");
+  };
+
+  const handleInsertClipToMail = (clip: ClipboardClip) => {
+    const separator = mailBody.trim() ? "\n\n" : "";
+    setMailBody((prev) => prev + separator + clip.content);
+    setMailOpen(true);
+    addToast("success", "Inserted", "Inserted clip into Quick Mail body.");
+  };
+
+  const handleInsertScratchpadToMail = () => {
+    if (!scratchpad.trim()) return;
+    const separator = mailBody.trim() ? "\n\n" : "";
+    setMailBody((prev) => prev + separator + scratchpad);
+    setMailOpen(true);
+    addToast("success", "Inserted", "Inserted scratchpad into Quick Mail body.");
+  };
 
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -632,6 +827,15 @@ export default function DashboardClient({ email }: { email: string }) {
     return depth;
   };
 
+  const filteredClips = clips.filter((c) => {
+    if (!clipSearch.trim()) return true;
+    const q = clipSearch.toLowerCase();
+    return (
+      (c.title && c.title.toLowerCase().includes(q)) ||
+      c.content.toLowerCase().includes(q)
+    );
+  });
+
   return (
     <div className="dashboard-body">
       <header className="dashboard-header glass-panel">
@@ -646,6 +850,13 @@ export default function DashboardClient({ email }: { email: string }) {
           <span className="logo-text">Swoshboard</span>
         </div>
         <div className="header-actions">
+          <button
+            className={`btn-secondary clipboard-toggle-btn ${clipboardOpen ? "active" : ""}`}
+            onClick={() => setClipboardOpen(!clipboardOpen)}
+            title="Open Clipboard (Alt+C)"
+          >
+            📋 Clipboard {clips.length > 0 && <span className="header-badge">{clips.length}</span>}
+          </button>
           <span className="user-chip" title={email}>{email}</span>
           <button className="btn-secondary" onClick={handleLogout}>Lock</button>
         </div>
@@ -875,7 +1086,19 @@ export default function DashboardClient({ email }: { email: string }) {
               />
             </div>
             <div className="form-group">
-              <label className="form-label">Notes / Body</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <label className="form-label" style={{ marginBottom: 0 }}>Notes / Body</label>
+                {scratchpad.trim() && (
+                  <button
+                    type="button"
+                    className="link-btn"
+                    style={{ fontSize: "12px" }}
+                    onClick={handleInsertScratchpadToMail}
+                  >
+                    + Paste Scratchpad
+                  </button>
+                )}
+              </div>
               <textarea
                 className="form-input"
                 rows={4}
@@ -962,6 +1185,183 @@ export default function DashboardClient({ email }: { email: string }) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {clipboardOpen && (
+        <div className="drawer-overlay" onClick={() => setClipboardOpen(false)}>
+          <aside className="clipboard-drawer glass-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-header">
+              <div className="drawer-title-group">
+                <span className="drawer-icon">📋</span>
+                <h2 className="drawer-title">My Clipboard</h2>
+              </div>
+              <div className="drawer-header-actions">
+                <span className="shortcut-hint" title="Keyboard shortcut">Alt+C</span>
+                <button className="icon-btn" onClick={() => setClipboardOpen(false)} title="Close">✕</button>
+              </div>
+            </div>
+
+            <div className="clipboard-tabs">
+              <button
+                className={`clipboard-tab ${clipboardTab === "scratchpad" ? "active" : ""}`}
+                onClick={() => setClipboardTab("scratchpad")}
+              >
+                📝 Scratchpad
+              </button>
+              <button
+                className={`clipboard-tab ${clipboardTab === "clips" ? "active" : ""}`}
+                onClick={() => setClipboardTab("clips")}
+              >
+                📌 Saved Clips ({clips.length})
+              </button>
+            </div>
+
+            {clipboardTab === "scratchpad" ? (
+              <div className="scratchpad-view">
+                <div className="scratchpad-meta">
+                  <div className="scratchpad-counts">
+                    {scratchpad.length} chars · {scratchpad.trim() ? scratchpad.trim().split(/\s+/).length : 0} words
+                  </div>
+                  <div className={`save-status status-${scratchpadStatus}`}>
+                    {scratchpadStatus === "saving" && "Saving..."}
+                    {scratchpadStatus === "saved" && "Saved ✓"}
+                    {scratchpadStatus === "error" && "Save error"}
+                    {scratchpadStatus === "idle" && "Auto-saves"}
+                  </div>
+                </div>
+
+                <textarea
+                  className="scratchpad-textarea form-input"
+                  placeholder="Paste or type text, links, code, or snippets here... Everything you type is saved automatically to your account and accessible anytime."
+                  value={scratchpad}
+                  onChange={(e) => handleScratchpadChange(e.target.value)}
+                  rows={14}
+                />
+
+                <div className="scratchpad-actions">
+                  <button
+                    className="btn-primary"
+                    disabled={!scratchpad}
+                    onClick={handleCopyScratchpad}
+                  >
+                    {copiedScratchpad ? "Copied! ✓" : "📋 Copy All"}
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    disabled={!scratchpad.trim() || savingClip}
+                    onClick={handleSaveScratchpadAsClip}
+                  >
+                    💾 Save as Clip
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    disabled={!scratchpad}
+                    onClick={handleInsertScratchpadToMail}
+                    title="Insert into Quick Mail body"
+                  >
+                    ✉ To Mail
+                  </button>
+                  <button
+                    className="btn-secondary danger-text"
+                    disabled={!scratchpad}
+                    onClick={handleClearScratchpad}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="clips-view">
+                <div className="clip-add-form">
+                  <input
+                    type="text"
+                    className="form-input clip-title-input"
+                    placeholder="Clip title (optional)"
+                    value={newClipTitle}
+                    onChange={(e) => setNewClipTitle(e.target.value)}
+                    maxLength={100}
+                  />
+                  <textarea
+                    className="form-input clip-content-input"
+                    placeholder="Clip content..."
+                    rows={3}
+                    value={newClipContent}
+                    onChange={(e) => setNewClipContent(e.target.value)}
+                  />
+                  <button
+                    className="btn-primary"
+                    disabled={!newClipContent.trim() || savingClip}
+                    onClick={handleAddClip}
+                  >
+                    {savingClip ? <div className="spinner"></div> : "+ Save New Clip"}
+                  </button>
+                </div>
+
+                {clips.length > 0 && (
+                  <div className="clip-search-bar">
+                    <input
+                      type="text"
+                      className="form-input search-input"
+                      placeholder="🔍 Search clips..."
+                      value={clipSearch}
+                      onChange={(e) => setClipSearch(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <div className="clips-list">
+                  {filteredClips.length === 0 ? (
+                    <div className="empty-clips">
+                      {clipSearch ? "No clips match your search." : "No saved clips yet. Add one above or save from your scratchpad!"}
+                    </div>
+                  ) : (
+                    filteredClips.map((clip) => (
+                      <div className="clip-card" key={clip.id}>
+                        <div className="clip-card-header">
+                          <span className="clip-card-title">{clip.title || "Untitled Clip"}</span>
+                          <span className="clip-card-date">{formatDate(clip.createdAt)}</span>
+                        </div>
+                        <div className="clip-card-body">{clip.content}</div>
+                        <div className="clip-card-footer">
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() => handleCopyClip(clip)}
+                          >
+                            {copiedClipId === clip.id ? "Copied! ✓" : "Copy"}
+                          </button>
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() => handleSendClipToScratchpad(clip)}
+                            title="Append to scratchpad"
+                          >
+                            To Scratchpad
+                          </button>
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() => handleInsertClipToMail(clip)}
+                            title="Insert into Quick Mail"
+                          >
+                            To Mail
+                          </button>
+                          <button
+                            className="icon-btn danger"
+                            onClick={() => handleDeleteClip(clip.id)}
+                            title="Delete clip"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"></polyline>
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </aside>
         </div>
       )}
 
