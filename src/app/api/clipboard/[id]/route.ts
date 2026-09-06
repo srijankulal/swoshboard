@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { ensureClipboardTables } from "../route";
 
 export async function DELETE(
   _request: Request,
@@ -14,6 +15,8 @@ export async function DELETE(
   const { id } = await context.params;
 
   try {
+    await ensureClipboardTables();
+
     const result = await db.execute({
       sql: "DELETE FROM clipboard_clips WHERE id = ? AND user_id = ?",
       args: [id, user.id],
@@ -25,6 +28,7 @@ export async function DELETE(
 
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
+    console.error("[api/clipboard DELETE error]:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not delete clip." },
       { status: 500 }

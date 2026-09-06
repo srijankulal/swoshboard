@@ -5,6 +5,36 @@ import { newId } from "@/lib/security";
 
 const MAX_CLIPBOARD_TEXT_LENGTH = 100_000;
 
+let tablesInitialized = false;
+
+export async function ensureClipboardTables(): Promise<void> {
+  if (tablesInitialized) return;
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS clipboard_scratchpad (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      content TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS clipboard_clips (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  try {
+    await db.execute(`
+      CREATE INDEX IF NOT EXISTS idx_clipboard_clips_user ON clipboard_clips(user_id, created_at DESC)
+    `);
+  } catch {
+    // index already exists or database limitation
+  }
+  tablesInitialized = true;
+}
+
 export async function GET() {
   const user = await getSessionUser();
   if (!user) {
@@ -12,6 +42,8 @@ export async function GET() {
   }
 
   try {
+    await ensureClipboardTables();
+
     const scratchpadRes = await db.execute({
       sql: "SELECT content, updated_at FROM clipboard_scratchpad WHERE user_id = ?",
       args: [user.id],
@@ -37,6 +69,7 @@ export async function GET() {
       clips,
     });
   } catch (error: unknown) {
+    console.error("[api/clipboard GET error]:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not fetch clipboard." },
       { status: 500 }
@@ -51,6 +84,8 @@ export async function PUT(request: Request) {
   }
 
   try {
+    await ensureClipboardTables();
+
     const body = await request.json();
     const content = typeof body.content === "string" ? body.content : "";
 
@@ -75,6 +110,7 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ success: true, updatedAt: now });
   } catch (error: unknown) {
+    console.error("[api/clipboard PUT error]:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not update scratchpad." },
       { status: 500 }
@@ -89,6 +125,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    await ensureClipboardTables();
+
     const body = await request.json();
     const content = String(body.content || "").trim();
     const title = body.title ? String(body.title).trim().slice(0, 120) : null;
@@ -125,6 +163,7 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (error: unknown) {
+    console.error("[api/clipboard POST error]:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not create clip." },
       { status: 500 }
