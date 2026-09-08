@@ -554,6 +554,7 @@ export default function DashboardClient({ email }: { email: string }) {
         signature: string;
         publicId: string;
         resourceType: string;
+        deliveryType: string;
       };
 
       await new Promise<void>((resolve, reject) => {
@@ -563,7 +564,7 @@ export default function DashboardClient({ email }: { email: string }) {
         form.append("api_key", upload.apiKey);
         form.append("timestamp", String(upload.timestamp));
         form.append("signature", upload.signature);
-        form.append("access_mode", "authenticated");
+        form.append("type", upload.deliveryType);
         form.append("resource_type", upload.resourceType);
 
         const xhr = new XMLHttpRequest();

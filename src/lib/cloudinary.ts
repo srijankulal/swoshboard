@@ -21,6 +21,7 @@ export interface SignedUpload {
   signature: string;
   publicId: string;
   resourceType: "raw";
+  deliveryType: "authenticated";
 }
 
 export function signUpload(userId: string, safeName: string): SignedUpload {
@@ -29,7 +30,7 @@ export function signUpload(userId: string, safeName: string): SignedUpload {
   const paramsToSign = {
     timestamp: Math.floor(Date.now() / 1000),
     public_id: publicId,
-    access_mode: "authenticated",
+    type: "authenticated",
   };
   const signature = cloudinary.utils.api_sign_request(paramsToSign, process.env.CLOUDINARY_API_SECRET!);
   return {
@@ -39,6 +40,7 @@ export function signUpload(userId: string, safeName: string): SignedUpload {
     signature,
     publicId,
     resourceType: "raw",
+    deliveryType: "authenticated",
   };
 }
 
