@@ -622,14 +622,43 @@ export default function DashboardClient({ email }: { email: string }) {
     void uploadNext();
   };
 
+  const triggerBrowserDownload = async (url: string, filename: string) => {
+    try {
+      const fileRes = await fetch(url);
+      if (!fileRes.ok) {
+        const cldErr = fileRes.headers.get("x-cld-error");
+        if (fileRes.status === 401 && (cldErr?.includes("ACL") || cldErr?.includes("deny"))) {
+          throw new Error(
+            'Cloudinary security block: Enable "Allow delivery of PDF and ZIP files" in Cloudinary Console > Settings > Security.'
+          );
+        }
+        throw new Error(cldErr || `Storage returned ${fileRes.status}`);
+      }
+      const blob = await fileRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("Cloudinary security block")) {
+        throw err;
+      }
+      // Fallback
+      window.open(url, "_blank");
+    }
+  };
+
   const handleDownload = async (file: StoredFile) => {
     try {
       const res = await fetch(`/api/files/${file.id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not prepare download.");
       if (data.success && data.url) {
-        // Use window.location to trigger download
-        window.location.href = data.url;
+        await triggerBrowserDownload(data.url, file.name);
       } else {
         throw new Error("Invalid download URL in response");
       }
@@ -647,12 +676,15 @@ export default function DashboardClient({ email }: { email: string }) {
         const res = await fetch(`/api/files/${file.id}`);
         const data = await res.json();
         if (res.ok && data.success && data.url) {
-          // Small delay between downloads to avoid blocking
-          await new Promise(resolve => setTimeout(resolve, 300));
-          window.open(data.url, '_blank');
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          await triggerBrowserDownload(data.url, file.name);
         }
-      } catch {
-        addToast("danger", "Download Failed", `Failed to download ${file.name}`);
+      } catch (err) {
+        addToast(
+          "danger",
+          "Download Failed",
+          err instanceof Error ? err.message : `Failed to download ${file.name}`
+        );
       }
     }
   };
