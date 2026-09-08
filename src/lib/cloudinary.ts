@@ -45,6 +45,7 @@ export function signUpload(userId: string, safeName: string): SignedUpload {
 export function signedDownloadUrl(publicId: string): string {
   return cloudinary.url(publicId, {
     resource_type: "raw",
+    type: "authenticated",
     secure: true,
     sign_url: true,
   });
