@@ -24,6 +24,8 @@ export interface SignedUpload {
   deliveryType: "authenticated";
 }
 
+type DeliveryType = "authenticated" | "upload";
+
 export function signUpload(userId: string, safeName: string): SignedUpload {
   const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const publicId = `${CLOUDINARY_FOLDER}/${userId}/${unique}-${safeName || "file"}`;
@@ -44,17 +46,56 @@ export function signUpload(userId: string, safeName: string): SignedUpload {
   };
 }
 
-export function signedDownloadUrl(publicId: string): string {
+export function signedDownloadUrl(publicId: string, deliveryType: DeliveryType = "authenticated"): string {
   return cloudinary.url(publicId, {
     resource_type: "raw",
-    type: "authenticated",
+    type: deliveryType,
     secure: true,
     sign_url: true,
   });
 }
 
+function isCloudinaryNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { http_code?: number; error?: { message?: string } };
+  if (e.http_code === 404) return true;
+  return e.error?.message?.toLowerCase().includes("not found") ?? false;
+}
+
+async function getResource(publicId: string, deliveryType: DeliveryType) {
+  return cloudinary.api.resource(publicId, { resource_type: "raw", type: deliveryType });
+}
+
+export async function detectResourceDeliveryType(publicId: string): Promise<DeliveryType | null> {
+  try {
+    await getResource(publicId, "authenticated");
+    return "authenticated";
+  } catch (error: unknown) {
+    if (!isCloudinaryNotFound(error)) throw error;
+  }
+
+  try {
+    await getResource(publicId, "upload");
+    return "upload";
+  } catch (error: unknown) {
+    if (!isCloudinaryNotFound(error)) throw error;
+  }
+
+  return null;
+}
+
+export async function resolveSignedDownloadUrl(publicId: string): Promise<string> {
+  const deliveryType = await detectResourceDeliveryType(publicId);
+  if (!deliveryType) {
+    throw new Error("File not found in storage.");
+  }
+  return signedDownloadUrl(publicId, deliveryType);
+}
+
 export async function getResourceBytes(publicId: string): Promise<number> {
-  const resource = await cloudinary.api.resource(publicId, { resource_type: "raw" });
+  const deliveryType = await detectResourceDeliveryType(publicId);
+  if (!deliveryType) return 0;
+  const resource = await getResource(publicId, deliveryType);
   return Number((resource as { bytes?: number }).bytes || 0);
 }
 

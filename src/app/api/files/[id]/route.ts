@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { deleteResource, isCloudinaryConfigured, signedDownloadUrl } from "@/lib/cloudinary";
+import { deleteResource, isCloudinaryConfigured, resolveSignedDownloadUrl } from "@/lib/cloudinary";
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser();
@@ -53,5 +53,12 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     );
   }
 
-  return NextResponse.json({ success: true, url: signedDownloadUrl(row.public_id) });
+  try {
+    return NextResponse.json({ success: true, url: await resolveSignedDownloadUrl(row.public_id) });
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "File not found in storage.") {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    return NextResponse.json({ error: "Could not prepare download URL." }, { status: 500 });
+  }
 }
