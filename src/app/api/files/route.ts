@@ -17,12 +17,14 @@ export async function GET() {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
-  const result = await db.execute({
-    sql: "SELECT * FROM files WHERE user_id = ? ORDER BY created_at DESC",
-    args: [user.id],
-  });
+  const [result, { usedBytes, fileCount }] = await Promise.all([
+    db.execute({
+      sql: "SELECT * FROM files WHERE user_id = ? ORDER BY created_at DESC",
+      args: [user.id],
+    }),
+    getUsage(user.id),
+  ]);
   const files: FileRow[] = result.rows.map((row) => toFileRow(row as Record<string, unknown>));
-  const { usedBytes, fileCount } = await getUsage(user.id);
 
   return NextResponse.json({
     files: files.map((f) => ({

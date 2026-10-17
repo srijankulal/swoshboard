@@ -116,6 +116,18 @@ export async function initDb(): Promise<void> {
     )
   `);
   await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_files_user_created ON files(user_id, created_at DESC)
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_files_user_folder ON files(user_id, folder_id)
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_folders_user_parent ON folders(user_id, parent_id)
+  `);
+  await db.execute(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)
+  `);
+  await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_clipboard_clips_user ON clipboard_clips(user_id, created_at DESC)
   `);
 }

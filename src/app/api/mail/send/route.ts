@@ -3,6 +3,7 @@ import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getSwoshmailConfig, sendViaSwoshmail } from "@/lib/mail";
 import { signedDownloadUrl } from "@/lib/cloudinary";
+import { normalizeEmail } from "@/lib/security";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const to = String(body.to || "").trim();
+    const to = normalizeEmail(String(body.to || ""));
     const subject = String(body.subject || "").trim();
     const text = String(body.text || "").trim();
     const fileIds: string[] = Array.isArray(body.fileIds) ? body.fileIds.map(String) : [];

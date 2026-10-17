@@ -66,17 +66,19 @@ async function getResource(publicId: string, deliveryType: DeliveryType) {
   return cloudinary.api.resource(publicId, { resource_type: "raw", type: deliveryType });
 }
 
-export async function detectResourceDeliveryType(publicId: string): Promise<DeliveryType | null> {
+async function fetchResourceWithDeliveryType(
+  publicId: string
+): Promise<{ deliveryType: DeliveryType; resource: { bytes?: number } } | null> {
   try {
-    await getResource(publicId, "authenticated");
-    return "authenticated";
+    const resource = (await getResource(publicId, "authenticated")) as { bytes?: number };
+    return { deliveryType: "authenticated", resource };
   } catch (error: unknown) {
     if (!isCloudinaryNotFound(error)) throw error;
   }
 
   try {
-    await getResource(publicId, "upload");
-    return "upload";
+    const resource = (await getResource(publicId, "upload")) as { bytes?: number };
+    return { deliveryType: "upload", resource };
   } catch (error: unknown) {
     if (!isCloudinaryNotFound(error)) throw error;
   }
@@ -84,19 +86,23 @@ export async function detectResourceDeliveryType(publicId: string): Promise<Deli
   return null;
 }
 
+export async function detectResourceDeliveryType(publicId: string): Promise<DeliveryType | null> {
+  const found = await fetchResourceWithDeliveryType(publicId);
+  return found ? found.deliveryType : null;
+}
+
 export async function resolveSignedDownloadUrl(publicId: string): Promise<string> {
-  const deliveryType = await detectResourceDeliveryType(publicId);
-  if (!deliveryType) {
+  const found = await fetchResourceWithDeliveryType(publicId);
+  if (!found) {
     throw new Error("File not found in storage.");
   }
-  return signedDownloadUrl(publicId, deliveryType);
+  return signedDownloadUrl(publicId, found.deliveryType);
 }
 
 export async function getResourceBytes(publicId: string): Promise<number> {
-  const deliveryType = await detectResourceDeliveryType(publicId);
-  if (!deliveryType) return 0;
-  const resource = await getResource(publicId, deliveryType);
-  return Number((resource as { bytes?: number }).bytes || 0);
+  const found = await fetchResourceWithDeliveryType(publicId);
+  if (!found) return 0;
+  return Number(found.resource.bytes || 0);
 }
 
 export async function deleteResource(publicIds: string | string[]): Promise<void> {

@@ -44,18 +44,19 @@ export async function GET() {
   try {
     await ensureClipboardTables();
 
-    const scratchpadRes = await db.execute({
-      sql: "SELECT content, updated_at FROM clipboard_scratchpad WHERE user_id = ?",
-      args: [user.id],
-    });
+    const [scratchpadRes, clipsRes] = await Promise.all([
+      db.execute({
+        sql: "SELECT content, updated_at FROM clipboard_scratchpad WHERE user_id = ?",
+        args: [user.id],
+      }),
+      db.execute({
+        sql: "SELECT id, user_id, title, content, created_at FROM clipboard_clips WHERE user_id = ? ORDER BY created_at DESC",
+        args: [user.id],
+      }),
+    ]);
     const scratchpadRow = scratchpadRes.rows[0] as unknown as
       | { content: string; updated_at: number }
       | undefined;
-
-    const clipsRes = await db.execute({
-      sql: "SELECT id, user_id, title, content, created_at FROM clipboard_clips WHERE user_id = ? ORDER BY created_at DESC",
-      args: [user.id],
-    });
     const clips = (clipsRes.rows as unknown as ClipboardClipRow[]).map((clip) => ({
       id: clip.id,
       title: clip.title || null,

@@ -49,6 +49,9 @@ interface CollectEntry {
   dirs: string[];
 }
 
+type SortBy = "date-desc" | "date-asc" | "name-asc" | "size-desc" | "size-asc";
+type ThemeMode = "system" | "light" | "dark";
+
 const CLOUDINARY_UPLOAD_URL = (cloudName: string) =>
   `https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`;
 
@@ -61,7 +64,52 @@ function formatBytes(bytes: number): string {
 }
 
 function formatDate(ms: number): string {
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getFileVisual(name: string, mime: string): { icon: string; badge: string } {
+  const lower = name.toLowerCase();
+  const ext = lower.includes(".") ? lower.split(".").pop() || "" : "";
+
+  if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"].includes(ext)) {
+    return { icon: "🖼️", badge: "IMG" };
+  }
+  if (mime === "application/pdf" || ext === "pdf") {
+    return { icon: "📕", badge: "PDF" };
+  }
+  if (["zip", "rar", "7z", "tar", "gz", "tgz"].includes(ext) || mime.includes("zip") || mime.includes("compressed")) {
+    return { icon: "🗜️", badge: "ZIP" };
+  }
+  if (mime.startsWith("audio/") || ["mp3", "wav", "ogg", "flac", "m4a"].includes(ext)) {
+    return { icon: "🎵", badge: "AUD" };
+  }
+  if (mime.startsWith("video/") || ["mp4", "mkv", "mov", "webm"].includes(ext)) {
+    return { icon: "🎬", badge: "VID" };
+  }
+  if (["js", "ts", "tsx", "jsx", "py", "json", "html", "css", "sql", "md", "sh", "yml", "yaml"].includes(ext)) {
+    return { icon: "💻", badge: ext.toUpperCase().slice(0, 4) };
+  }
+  if (["csv", "xls", "xlsx"].includes(ext)) {
+    return { icon: "📊", badge: "DATA" };
+  }
+  if (["doc", "docx", "txt", "rtf", "odt"].includes(ext)) {
+    return { icon: "📝", badge: "DOC" };
+  }
+  return { icon: "📄", badge: ext ? ext.toUpperCase().slice(0, 4) : "FILE" };
+}
+
+function normalizeEmail(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!trimmed.includes("@")) return `${trimmed}@gmail.com`;
+  if (trimmed.endsWith("@")) return `${trimmed}gmail.com`;
+  return trimmed;
 }
 
 function walkEntry(entry: FileSystemEntry, dirs: string[], out: CollectEntry[]): Promise<void> {
@@ -112,17 +160,36 @@ export default function DashboardClient({ email }: { email: string }) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadName, setUploadName] = useState("");
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("date-desc");
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("swosh_theme");
+        if (saved === "light" || saved === "dark" || saved === "system") {
+          return saved;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return "system";
+  });
+
   const [mailSelected, setMailSelected] = useState<Set<string>>(new Set());
   const [mailOpen, setMailOpen] = useState(false);
   const [mailTo, setMailTo] = useState("");
   const [mailSubject, setMailSubject] = useState("");
   const [mailBody, setMailBody] = useState("");
   const [sendingMail, setSendingMail] = useState(false);
-  const [modal, setModal] = useState<null | "newFolder" | "renameFolder" | "moveFiles">(null);
+
+  const [modal, setModal] = useState<null | "newFolder" | "renameFolder" | "moveFiles" | "deleteFolder">(null);
   const [modalFolder, setModalFolder] = useState<Folder | null>(null);
   const [folderNameInput, setFolderNameInput] = useState("");
   const [moveTarget, setMoveTarget] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
+  const [deletingFolderBusy, setDeletingFolderBusy] = useState(false);
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -138,7 +205,6 @@ export default function DashboardClient({ email }: { email: string }) {
   const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
   const [copiedScratchpad, setCopiedScratchpad] = useState(false);
   const [savingClip, setSavingClip] = useState(false);
-  const isClipboardLoaded = useRef(false);
   const scratchpadSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -154,16 +220,42 @@ export default function DashboardClient({ email }: { email: string }) {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4800);
   }, []);
 
-  const refresh = async () => {
+  const dismissToast = (id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Theme sync with document root and localStorage
+  useEffect(() => {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
     try {
-      const res = await fetch("/api/files");
+      localStorage.setItem("swosh_theme", theme);
+    } catch {
+      // ignore storage errors
+    }
+  }, [theme]);
+
+  const cycleTheme = () => {
+    setTheme((prev) => (prev === "system" ? "light" : prev === "light" ? "dark" : "system"));
+  };
+
+  const refresh = useCallback(async () => {
+    try {
+      const [res, folderRes] = await Promise.all([
+        fetch("/api/files"),
+        fetch("/api/folders"),
+      ]);
       if (res.status === 401) {
         router.push("/login");
         return;
       }
-      const data = await res.json();
-      const folderRes = await fetch("/api/folders");
-      const folderData = await folderRes.json();
+      const [data, folderData] = await Promise.all([
+        res.json(),
+        folderRes.json(),
+      ]);
       if (res.ok) {
         setFiles(data.files);
         setUsage(data.usage);
@@ -181,33 +273,39 @@ export default function DashboardClient({ email }: { email: string }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast, router]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/files");
+        const [res, folderRes, clipRes] = await Promise.all([
+          fetch("/api/files"),
+          fetch("/api/folders"),
+          fetch("/api/clipboard").catch(() => null),
+        ]);
         if (res.status === 401) {
           router.push("/login");
           return;
         }
-        const data = await res.json();
-        const folderRes = await fetch("/api/folders");
-        const folderData = await folderRes.json();
+        const [data, folderData] = await Promise.all([
+          res.json(),
+          folderRes.json(),
+        ]);
         if (res.ok && !cancelled) {
           setFiles(data.files);
           setUsage(data.usage);
-          setMailSelected((prev) => {
-            const ids = new Set(data.files.map((f: StoredFile) => f.id));
-            return new Set([...prev].filter((id) => ids.has(id)));
-          });
         }
         if (folderRes.ok && !cancelled) {
           setFolders(folderData.folders);
         }
+        if (clipRes && clipRes.ok && !cancelled) {
+          const clipData = await clipRes.json();
+          setScratchpad(clipData.scratchpad || "");
+          setClips(clipData.clips || []);
+        }
       } catch {
-        addToast("danger", "Error", "Could not load your board.");
+        if (!cancelled) addToast("danger", "Error", "Could not load your board.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -218,33 +316,28 @@ export default function DashboardClient({ email }: { email: string }) {
   }, [addToast, router]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/clipboard");
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setScratchpad(data.scratchpad || "");
-          setClips(data.clips || []);
-          isClipboardLoaded.current = true;
-        }
-      } catch {
-        // silent fallback
-      }
-    })();
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
         setClipboardOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "Escape") {
+        if (modal !== null) {
+          setModal(null);
+          setModalFolder(null);
+        } else if (clipboardOpen) {
+          setClipboardOpen(false);
+        } else if (mailOpen) {
+          setMailOpen(false);
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      cancelled = true;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [modal, clipboardOpen, mailOpen]);
 
   const handleScratchpadChange = (newVal: string) => {
     setScratchpad(newVal);
@@ -527,6 +620,7 @@ export default function DashboardClient({ email }: { email: string }) {
       setUploadProgress(0);
       folderCache.current.clear();
       await refresh();
+      addToast("success", "Upload Complete", "All files have been backed up.");
       return;
     }
     const file = item.file;
@@ -647,7 +741,6 @@ export default function DashboardClient({ email }: { email: string }) {
       if (err instanceof Error && err.message.includes("Cloudinary security block")) {
         throw err;
       }
-      // Fallback
       window.open(url, "_blank");
     }
   };
@@ -696,6 +789,15 @@ export default function DashboardClient({ email }: { email: string }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not delete file.");
       setFiles((prev) => prev.filter((f) => f.id !== file.id));
+      setUsage((prev) =>
+        prev
+          ? {
+              ...prev,
+              usedBytes: Math.max(0, prev.usedBytes - file.size),
+              fileCount: Math.max(0, prev.fileCount - 1),
+            }
+          : prev
+      );
       setMailSelected((prev) => {
         const next = new Set(prev);
         next.delete(file.id);
@@ -709,10 +811,10 @@ export default function DashboardClient({ email }: { email: string }) {
     }
   };
 
-  const handleDeleteFolder = async (folder: Folder) => {
-    if (!window.confirm(`Delete folder "${folder.name}" and everything inside it? This cannot be undone.`)) {
-      return;
-    }
+  const confirmDeleteFolder = async () => {
+    if (!modalFolder) return;
+    const folder = modalFolder;
+    setDeletingFolderBusy(true);
     try {
       const res = await fetch(`/api/folders/${folder.id}`, { method: "DELETE" });
       const data = await res.json();
@@ -720,10 +822,14 @@ export default function DashboardClient({ email }: { email: string }) {
       if (currentFolderId === folder.id) {
         setCurrentFolderId(folder.parentId);
       }
+      setModal(null);
+      setModalFolder(null);
       await refresh();
       addToast("success", "Folder Deleted", `"${folder.name}" and its contents were removed.`);
     } catch (err) {
       addToast("danger", "Delete Failed", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setDeletingFolderBusy(false);
     }
   };
 
@@ -738,9 +844,13 @@ export default function DashboardClient({ email }: { email: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not create folder.");
+      if (data.folder) {
+        setFolders((prev) => [...prev, data.folder]);
+      } else {
+        await refresh();
+      }
       setModal(null);
       setFolderNameInput("");
-      await refresh();
       addToast("success", "Folder Created", `"${name}" is ready.`);
     } catch (err) {
       addToast("danger", "Create Failed", err instanceof Error ? err.message : "Unknown error");
@@ -758,9 +868,11 @@ export default function DashboardClient({ email }: { email: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename folder.");
+      setFolders((prev) =>
+        prev.map((f) => (f.id === modalFolder.id ? { ...f, name } : f))
+      );
       setModal(null);
       setModalFolder(null);
-      await refresh();
       addToast("success", "Renamed", `Folder is now "${name}".`);
     } catch (err) {
       addToast("danger", "Rename Failed", err instanceof Error ? err.message : "Unknown error");
@@ -779,9 +891,12 @@ export default function DashboardClient({ email }: { email: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not move files.");
+      const movedSet = new Set(fileIds);
+      setFiles((prev) =>
+        prev.map((f) => (movedSet.has(f.id) ? { ...f, folderId: moveTarget } : f))
+      );
       setModal(null);
       setMailSelected(new Set());
-      await refresh();
       addToast("success", "Moved", `${data.moved} file(s) moved.`);
     } catch (err) {
       addToast("danger", "Move Failed", err instanceof Error ? err.message : "Unknown error");
@@ -800,13 +915,19 @@ export default function DashboardClient({ email }: { email: string }) {
   };
 
   const handleSendMail = async () => {
+    const finalTo = normalizeEmail(mailTo);
+    setMailTo(finalTo);
+    if (!finalTo) {
+      addToast("danger", "Recipient Required", "Please enter a recipient email address.");
+      return;
+    }
     setSendingMail(true);
     try {
       const res = await fetch("/api/mail/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: mailTo,
+          to: finalTo,
           subject: mailSubject,
           body: mailBody,
           fileIds: Array.from(mailSelected),
@@ -832,6 +953,12 @@ export default function DashboardClient({ email }: { email: string }) {
   const percent = usage && usage.limitBytes > 0 ? Math.min(100, (usage.usedBytes / usage.limitBytes) * 100) : 0;
   const selectedFiles = files.filter((f) => mailSelected.has(f.id));
 
+  // Precompute file counts per folder in O(N)
+  const folderFileCounts = new Map<string | null, number>();
+  for (const f of files) {
+    folderFileCounts.set(f.folderId, (folderFileCounts.get(f.folderId) || 0) + 1);
+  }
+
   const breadcrumbs: Folder[] = [];
   {
     let cursor = folders.find((f) => f.id === currentFolderId) ?? null;
@@ -841,10 +968,45 @@ export default function DashboardClient({ email }: { email: string }) {
     }
   }
 
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+
   const visibleFolders = folders
-    .filter((f) => f.parentId === currentFolderId)
+    .filter((f) =>
+      normalizedSearch
+        ? f.name.toLowerCase().includes(normalizedSearch)
+        : f.parentId === currentFolderId
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
-  const visibleFiles = files.filter((f) => f.folderId === currentFolderId);
+
+  const visibleFiles = files
+    .filter((f) =>
+      normalizedSearch
+        ? f.name.toLowerCase().includes(normalizedSearch)
+        : f.folderId === currentFolderId
+    )
+    .sort((a, b) => {
+      if (sortBy === "date-desc") return b.createdAt - a.createdAt;
+      if (sortBy === "date-asc") return a.createdAt - b.createdAt;
+      if (sortBy === "name-asc") return a.name.localeCompare(b.name);
+      if (sortBy === "size-desc") return b.size - a.size;
+      if (sortBy === "size-asc") return a.size - b.size;
+      return 0;
+    });
+
+  const allVisibleSelected =
+    visibleFiles.length > 0 && visibleFiles.every((f) => mailSelected.has(f.id));
+
+  const toggleSelectAllVisible = () => {
+    setMailSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const f of visibleFiles) next.delete(f.id);
+      } else {
+        for (const f of visibleFiles) next.add(f.id);
+      }
+      return next;
+    });
+  };
 
   const renderFolderTree = (parentId: string | null, depth: number): Folder[] => {
     return folders
@@ -852,6 +1014,7 @@ export default function DashboardClient({ email }: { email: string }) {
       .sort((a, b) => a.name.localeCompare(b.name))
       .flatMap((f) => [f, ...renderFolderTree(f.id, depth + 1)]);
   };
+
   const folderDepth = (folder: Folder): number => {
     let depth = 0;
     let cursor = folder.parentId;
@@ -873,82 +1036,178 @@ export default function DashboardClient({ email }: { email: string }) {
 
   return (
     <div className="dashboard-body">
+      <a href="#board-main" className="skip-link">
+        Skip to files and folders
+      </a>
+
       <header className="dashboard-header glass-panel">
         <div className="logo-group">
-          <div className="logo-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <div className="logo-icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
               <line x1="3" y1="9" x2="21" y2="9"></line>
               <line x1="9" y1="21" x2="9" y2="9"></line>
             </svg>
           </div>
-          <span className="logo-text">Swoshboard</span>
+          <div>
+            <span className="logo-text">Swoshboard</span>
+            <span className="logo-badge">CLOUD BACKUP</span>
+          </div>
         </div>
         <div className="header-actions">
           <button
+            type="button"
+            className="btn-secondary theme-toggle-btn"
+            onClick={cycleTheme}
+            aria-label={`Theme: ${theme}. Click to switch theme`}
+            title={`Theme: ${theme} (click to switch)`}
+          >
+            <span aria-hidden="true">
+              {theme === "light" ? "☀️" : theme === "dark" ? "🌙" : "🖥️"}
+            </span>
+            <span className="theme-label">
+              {theme === "light" ? "Light" : theme === "dark" ? "Dark" : "Auto"}
+            </span>
+          </button>
+          <button
+            type="button"
             className={`btn-secondary clipboard-toggle-btn ${clipboardOpen ? "active" : ""}`}
             onClick={() => setClipboardOpen(!clipboardOpen)}
+            aria-expanded={clipboardOpen}
+            aria-controls="clipboard-drawer"
             title="Open Clipboard (Alt+C)"
           >
-            📋 Clipboard {clips.length > 0 && <span className="header-badge">{clips.length}</span>}
+            <span aria-hidden="true">📋</span> Clipboard
+            {clips.length > 0 && <span className="header-badge" aria-label={`${clips.length} saved clips`}>{clips.length}</span>}
           </button>
-          <span className="user-chip" title={email}>{email}</span>
-          <button className="btn-secondary" onClick={handleLogout}>Lock</button>
+          <span className="user-chip" title={email} aria-label={`Signed in as ${email}`}>
+            {email}
+          </span>
+          <button type="button" className="btn-secondary" onClick={handleLogout}>
+            Lock
+          </button>
         </div>
       </header>
 
-      <main className="dashboard-grid">
-        <section className="board-panel glass-panel">
+      <main id="board-main" className="dashboard-grid">
+        <section className="board-panel glass-panel" aria-labelledby="board-heading">
           <div className="panel-head">
-            <h2 className="panel-title">My Backup Space</h2>
-            <div className="usage-bar">
-              <div className="usage-bar-fill" style={{ width: `${percent}%` }}></div>
+            <div className="panel-title-wrap">
+              <h1 id="board-heading" className="panel-title">My Backup Space</h1>
+              <span className="usage-label">
+                {usage
+                  ? `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.limitBytes)} (${Math.round(percent)}%) · ${usage.fileCount} file(s)`
+                  : "Loading storage metrics..."}
+              </span>
             </div>
-            <span className="usage-label">
-              {usage ? `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.limitBytes)} used` : "..."}
-              {usage ? ` · ${usage.fileCount} file(s)` : ""}
-            </span>
+            <div
+              className="usage-bar"
+              role="progressbar"
+              aria-label="Storage quota usage"
+              aria-valuenow={Math.round(percent)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className={`usage-bar-fill ${percent > 85 ? "usage-high" : ""}`}
+                style={{ width: `${percent}%` }}
+              ></div>
+            </div>
           </div>
 
-          <nav className="breadcrumb">
+          <nav className="breadcrumb" aria-label="Folder breadcrumb">
             <button
-              className="breadcrumb-btn"
-              onClick={() => setCurrentFolderId(null)}
+              type="button"
+              className={`breadcrumb-btn ${currentFolderId === null ? "active" : ""}`}
+              aria-current={currentFolderId === null ? "location" : undefined}
+              onClick={() => {
+                setCurrentFolderId(null);
+                setSearchQuery("");
+              }}
             >
-              Root
+              🏠 Root
             </button>
-            {breadcrumbs.map((f) => (
-              <span key={f.id} className="breadcrumb-item">
-                <span className="breadcrumb-sep">›</span>
-                <button className="breadcrumb-btn" onClick={() => setCurrentFolderId(f.id)}>
-                  {f.name}
-                </button>
-              </span>
-            ))}
+            {breadcrumbs.map((f, idx) => {
+              const isCurrent = idx === breadcrumbs.length - 1;
+              return (
+                <span key={f.id} className="breadcrumb-item">
+                  <span className="breadcrumb-sep" aria-hidden="true">/</span>
+                  <button
+                    type="button"
+                    className={`breadcrumb-btn ${isCurrent ? "active" : ""}`}
+                    aria-current={isCurrent ? "location" : undefined}
+                    onClick={() => {
+                      setCurrentFolderId(f.id);
+                      setSearchQuery("");
+                    }}
+                  >
+                    {f.name}
+                  </button>
+                </span>
+              );
+            })}
           </nav>
 
           <div className="board-toolbar">
-            <button className="btn-secondary" onClick={() => { setModal("newFolder"); setFolderNameInput(""); }}>
-              + New Folder
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setModal("newFolder");
+                setFolderNameInput("");
+              }}
+            >
+              <span aria-hidden="true">+</span> New Folder
             </button>
-            <button className="btn-secondary" onClick={() => folderInputRef.current?.click()}>
-              ⬆ Upload Folder
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <span aria-hidden="true">📄</span> Upload Files
             </button>
-            <span className="toolbar-note">All file types · max {formatBytes(10 * 1024 * 1024)} per file</span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => folderInputRef.current?.click()}
+            >
+              <span aria-hidden="true">⬆️</span> Upload Folder
+            </button>
+            <span className="toolbar-note">Max {formatBytes(10 * 1024 * 1024)} per file</span>
             <input
               type="file"
               ref={folderInputRef}
               onChange={handleFolderChange}
               style={{ display: "none" }}
               multiple
+              aria-hidden="true"
+              tabIndex={-1}
               {...{ webkitdirectory: "" }}
             />
           </div>
 
           <div
-            className={`sw-dropzone ${isDragging ? "active" : ""}`}
-            onClick={() => fileInputRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            role="button"
+            tabIndex={0}
+            aria-label={
+              uploading
+                ? `Uploading ${uploadName}, ${uploadProgress}% complete`
+                : "Drop files or folders here, or press Enter to browse files to upload"
+            }
+            className={`sw-dropzone ${isDragging ? "active" : ""} ${uploading ? "uploading" : ""}`}
+            onClick={() => {
+              if (!uploading) fileInputRef.current?.click();
+            }}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && !uploading) {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
           >
@@ -958,161 +1217,309 @@ export default function DashboardClient({ email }: { email: string }) {
               onChange={handleFileChange}
               style={{ display: "none" }}
               multiple
+              aria-hidden="true"
+              tabIndex={-1}
             />
-            <div className="dropzone-icon">📦</div>
-            <div className="dropzone-title">{uploading ? `Uploading ${uploadName}...` : "Drop files or folders here"}</div>
-            <div className="dropzone-subtitle">or click to browse · folders keep their structure</div>
+            <div className="dropzone-icon" aria-hidden="true">
+              {uploading ? "⏳" : isDragging ? "📥" : "📦"}
+            </div>
+            <div className="dropzone-title">
+              {uploading ? `Uploading ${uploadName}...` : "Drop files or folders here"}
+            </div>
+            <div className="dropzone-subtitle">
+              or click / press Enter to browse · folder hierarchies are preserved
+            </div>
             {uploading && (
-              <div className="progress-container">
+              <div
+                className="progress-container"
+                role="progressbar"
+                aria-label={`Uploading ${uploadName}`}
+                aria-valuenow={uploadProgress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
                 <div className="progress-bar-wrapper">
                   <div className="progress-bar-fill" style={{ width: `${uploadProgress}%` }}></div>
                 </div>
-                <div className="progress-label">{uploadProgress}%</div>
+                <div className="progress-label" aria-live="polite">{uploadProgress}%</div>
               </div>
             )}
           </div>
 
-          {loading ? (
-            <div className="empty-state">Loading your board...</div>
-          ) : visibleFolders.length === 0 && visibleFiles.length === 0 ? (
-            <div className="empty-state">
-              <p>Nothing here yet. Drop files or a whole folder, or create a folder to organize your backups — anything in here can be emailed anytime with Swoshmail.</p>
-            </div>
-          ) : (
-            <div className="file-list">
-              {visibleFolders.map((folder) => (
-                <div className="file-card folder-row" key={folder.id}>
-                  <div className="file-info folder-open" onClick={() => setCurrentFolderId(folder.id)}>
-                    <span className="file-icon">📁</span>
-                    <div className="file-meta">
-                      <div className="file-name" title={folder.name}>{folder.name}</div>
-                      <div className="file-sub">Folder · {files.filter((f) => f.folderId === folder.id).length} file(s)</div>
-                    </div>
-                  </div>
-                  <div className="file-actions">
-                    <button
-                      className="icon-btn"
-                      title="Rename folder"
-                      onClick={() => { setModalFolder(folder); setFolderNameInput(folder.name); setModal("renameFolder"); }}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-                      </svg>
-                    </button>
-                    <button
-                      className="icon-btn danger"
-                      title="Delete folder"
-                      disabled={deletingId === folder.id}
-                      onClick={() => handleDeleteFolder(folder)}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {visibleFiles.map((file) => (
-                <div className="file-card" key={file.id}>
-                  <label className="mail-check" title="Select file">
-                    <input
-                      type="checkbox"
-                      checked={mailSelected.has(file.id)}
-                      onChange={() => toggleMailSelect(file.id)}
-                    />
-                  </label>
-                  <div className="file-info">
-                    <span className="file-icon">📄</span>
-                    <div className="file-meta">
-                      <div className="file-name" title={file.name}>{file.name}</div>
-                      <div className="file-sub">{formatBytes(file.size)} · {formatDate(file.createdAt)}</div>
-                    </div>
-                  </div>
-                  <div className="file-actions">
-                    <button className="icon-btn" title="Download" onClick={() => handleDownload(file)}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="7 10 12 15 17 10"></polyline>
-                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                      </svg>
-                    </button>
-                    <button
-                      className="icon-btn danger"
-                      title="Delete"
-                      disabled={deletingId === file.id}
-                      onClick={() => handleDelete(file)}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              ))}
+          {(files.length > 0 || folders.length > 0) && (
+            <div className="filter-bar" role="search" aria-label="Filter and sort files">
+              <div className="search-field-wrap">
+                <label htmlFor="board-search" className="sr-only">
+                  Search files and folders
+                </label>
+                <input
+                  id="board-search"
+                  type="search"
+                  className="form-input filter-search-input"
+                  placeholder="Search files & folders..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <div className="filter-controls">
+                <label htmlFor="board-sort" className="sr-only">
+                  Sort files by
+                </label>
+                <select
+                  id="board-sort"
+                  className="form-input filter-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortBy)}
+                >
+                  <option value="date-desc">Newest first</option>
+                  <option value="date-asc">Oldest first</option>
+                  <option value="name-asc">Name (A–Z)</option>
+                  <option value="size-desc">Size (Largest)</option>
+                  <option value="size-asc">Size (Smallest)</option>
+                </select>
+                {visibleFiles.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-compact"
+                    onClick={toggleSelectAllVisible}
+                    aria-pressed={allVisibleSelected}
+                  >
+                    {allVisibleSelected ? "Deselect All" : "Select All"}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
-          <div className="mail-launch">
+          {loading ? (
+            <div className="skeleton-list" role="status" aria-live="polite" aria-label="Loading your files">
+              <div className="skeleton-row"></div>
+              <div className="skeleton-row"></div>
+              <div className="skeleton-row"></div>
+            </div>
+          ) : visibleFolders.length === 0 && visibleFiles.length === 0 ? (
+            <div className="empty-state" role="status">
+              {normalizedSearch ? (
+                <p>No files or folders match &ldquo;{searchQuery}&rdquo;.</p>
+              ) : (
+                <p>
+                  Nothing in this folder yet. Drop files or a whole folder above, or create a subfolder — anything stored here can be emailed anytime via Swoshmail.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="file-list" role="list" aria-label="Folders and files">
+              {visibleFolders.map((folder) => {
+                const count = folderFileCounts.get(folder.id) || 0;
+                return (
+                  <div className="file-card folder-row" role="listitem" key={folder.id}>
+                    <button
+                      type="button"
+                      className="file-info folder-open-btn"
+                      onClick={() => {
+                        setCurrentFolderId(folder.id);
+                        setSearchQuery("");
+                      }}
+                      aria-label={`Open folder ${folder.name}, contains ${count} file(s)`}
+                    >
+                      <span className="file-icon" aria-hidden="true">📁</span>
+                      <div className="file-meta">
+                        <div className="file-name" title={folder.name}>{folder.name}</div>
+                        <div className="file-sub">
+                          Folder · {count} {count === 1 ? "file" : "files"}
+                        </div>
+                      </div>
+                    </button>
+                    <div className="file-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Rename folder ${folder.name}`}
+                        title="Rename folder"
+                        onClick={() => {
+                          setModalFolder(folder);
+                          setFolderNameInput(folder.name);
+                          setModal("renameFolder");
+                        }}
+                      >
+                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        aria-label={`Delete folder ${folder.name}`}
+                        title="Delete folder"
+                        disabled={deletingId === folder.id}
+                        onClick={() => {
+                          setModalFolder(folder);
+                          setModal("deleteFolder");
+                        }}
+                      >
+                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {visibleFiles.map((file) => {
+                const isSelected = mailSelected.has(file.id);
+                const visual = getFileVisual(file.name, file.mime);
+                return (
+                  <div
+                    className={`file-card ${isSelected ? "selected" : ""}`}
+                    role="listitem"
+                    key={file.id}
+                  >
+                    <label className="mail-check" title={`Select ${file.name}`}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleMailSelect(file.id)}
+                        aria-label={`Select ${file.name}`}
+                      />
+                    </label>
+                    <div
+                      className="file-info file-select-trigger"
+                      onClick={() => toggleMailSelect(file.id)}
+                    >
+                      <span className="file-icon" aria-hidden="true">{visual.icon}</span>
+                      <div className="file-meta">
+                        <div className="file-name-row">
+                          <span className="file-name" title={file.name}>{file.name}</span>
+                          <span className="file-badge" aria-hidden="true">{visual.badge}</span>
+                        </div>
+                        <div className="file-sub">
+                          {formatBytes(file.size)} · {formatDate(file.createdAt)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="file-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Download ${file.name}`}
+                        title="Download"
+                        onClick={() => handleDownload(file)}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                          <polyline points="7 10 12 15 17 10"></polyline>
+                          <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        aria-label={`Delete ${file.name}`}
+                        title="Delete"
+                        disabled={deletingId === file.id}
+                        onClick={() => handleDelete(file)}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="mail-launch" role="region" aria-label="Bulk actions for selected files">
             <div className="bulk-actions">
               <button
+                type="button"
                 className="btn-primary"
                 disabled={mailSelected.size === 0}
                 onClick={() => setMailOpen(true)}
               >
-                ✉ Mail {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
+                <span aria-hidden="true">✉️</span> Mail {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
               </button>
               <button
+                type="button"
                 className="btn-secondary"
                 disabled={mailSelected.size === 0}
                 onClick={handleBulkDownload}
               >
-                ⬇ Download {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
+                <span aria-hidden="true">⬇️</span> Download {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
               </button>
               <button
+                type="button"
                 className="btn-secondary"
                 disabled={mailSelected.size === 0}
-                onClick={() => { setMoveTarget(null); setModal("moveFiles"); }}
+                onClick={() => {
+                  setMoveTarget(null);
+                  setModal("moveFiles");
+                }}
               >
-                📁 Move {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
+                <span aria-hidden="true">📁</span> Move {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
               </button>
             </div>
-            <span className="agency-note">Select files with checkboxes • Emails sent via Swoshmail</span>
+            <span className="agency-note">
+              {mailSelected.size > 0
+                ? `${mailSelected.size} file(s) selected (${formatBytes(selectedFiles.reduce((acc, f) => acc + f.size, 0))})`
+                : "Select files above to email via Swoshmail, download, or move between folders"}
+            </span>
           </div>
         </section>
 
         {mailOpen && (
-          <aside className="mail-panel glass-panel">
+          <aside className="mail-panel glass-panel" aria-labelledby="quick-mail-heading">
             <div className="panel-head">
-              <h2 className="panel-title">Quick Mail</h2>
-              <button className="icon-btn" onClick={() => setMailOpen(false)}>✕</button>
+              <h2 id="quick-mail-heading" className="panel-title">Quick Mail</h2>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Close Quick Mail panel"
+                onClick={() => setMailOpen(false)}
+              >
+                ✕
+              </button>
             </div>
 
-            <div className="mail-attachment-list">
+            <div className="mail-attachment-list" aria-label="Selected attachments">
               {selectedFiles.map((f) => (
                 <div className="mail-attachment" key={f.id}>
-                  <span>📎 {f.name}</span>
+                  <span className="mail-attachment-name" title={f.name}>📎 {f.name}</span>
                   <span className="mail-attachment-size">{formatBytes(f.size)}</span>
                 </div>
               ))}
             </div>
 
             <div className="form-group">
-              <label className="form-label">To</label>
-              <input
-                type="email"
-                className="form-input"
-                placeholder="recipient@example.com"
-                value={mailTo}
-                onChange={(e) => setMailTo(e.target.value)}
-                required
-              />
+              <label htmlFor="mail-to" className="form-label">To</label>
+              <div className="input-wrapper">
+                <input
+                  id="mail-to"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="form-input"
+                  placeholder="username or recipient@example.com"
+                  value={mailTo}
+                  onChange={(e) => setMailTo(e.target.value)}
+                  onBlur={() => setMailTo((prev) => normalizeEmail(prev))}
+                  required
+                />
+                {mailTo.trim().length > 0 && !mailTo.includes("@") && (
+                  <span className="email-domain-hint" aria-hidden="true">@gmail.com</span>
+                )}
+              </div>
             </div>
             <div className="form-group">
-              <label className="form-label">Subject</label>
+              <label htmlFor="mail-subject" className="form-label">Subject</label>
               <input
+                id="mail-subject"
                 type="text"
                 className="form-input"
                 placeholder="Backup files from Swoshboard"
@@ -1121,8 +1528,10 @@ export default function DashboardClient({ email }: { email: string }) {
               />
             </div>
             <div className="form-group">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                <label className="form-label" style={{ marginBottom: 0 }}>Notes / Body</label>
+              <div className="form-label-row">
+                <label htmlFor="mail-body" className="form-label" style={{ marginBottom: 0 }}>
+                  Notes / Body
+                </label>
                 {scratchpad.trim() && (
                   <button
                     type="button"
@@ -1135,6 +1544,7 @@ export default function DashboardClient({ email }: { email: string }) {
                 )}
               </div>
               <textarea
+                id="mail-body"
                 className="form-input"
                 rows={4}
                 placeholder="Anything you want to say with the files..."
@@ -1143,25 +1553,55 @@ export default function DashboardClient({ email }: { email: string }) {
               ></textarea>
             </div>
 
-            <button className="btn-primary" disabled={sendingMail} onClick={handleSendMail}>
-              {sendingMail ? <div className="spinner"></div> : "Send via Swoshmail"}
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={sendingMail || selectedFiles.length === 0}
+              aria-busy={sendingMail}
+              onClick={handleSendMail}
+            >
+              {sendingMail ? <div className="spinner" aria-hidden="true"></div> : "Send via Swoshmail"}
             </button>
           </aside>
         )}
       </main>
 
       <footer className="sw-footer">
-        <span className="powered-by">Powered by <span className="powered-by-name">Swoshmail</span></span>
-        <a href="https://github.com/srijankulal" target="_blank" rel="noopener noreferrer" className="github-link">GitHub</a>
+        <span className="powered-by">
+          Powered by <span className="powered-by-name">Swoshmail</span>
+        </span>
+        <a
+          href="https://github.com/srijankulal"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="github-link"
+        >
+          GitHub
+        </a>
       </footer>
 
       {(modal === "newFolder" || (modal === "renameFolder" && modalFolder)) && (
-        <div className="modal-overlay" onClick={() => { setModal(null); setModalFolder(null); }}>
-          <div className="modal glass-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">{modal === "newFolder" ? "Create Folder" : "Rename Folder"}</div>
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            setModal(null);
+            setModalFolder(null);
+          }}
+        >
+          <div
+            className="modal glass-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="folder-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="folder-modal-title" className="modal-title">
+              {modal === "newFolder" ? "Create Folder" : "Rename Folder"}
+            </h2>
             <div className="form-group">
-              <label className="form-label">Folder name</label>
+              <label htmlFor="folder-name-input" className="form-label">Folder name</label>
               <input
+                id="folder-name-input"
                 type="text"
                 className="form-input"
                 placeholder="e.g. Projects"
@@ -1178,8 +1618,18 @@ export default function DashboardClient({ email }: { email: string }) {
               />
             </div>
             <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => { setModal(null); setModalFolder(null); }}>Cancel</button>
               <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setModal(null);
+                  setModalFolder(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
                 className="btn-primary"
                 disabled={!folderNameInput.trim()}
                 onClick={modal === "newFolder" ? handleCreateFolder : handleRenameFolder}
@@ -1191,32 +1641,104 @@ export default function DashboardClient({ email }: { email: string }) {
         </div>
       )}
 
+      {modal === "deleteFolder" && modalFolder && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!deletingFolderBusy) {
+              setModal(null);
+              setModalFolder(null);
+            }
+          }}
+        >
+          <div
+            className="modal glass-panel"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-folder-title"
+            aria-describedby="delete-folder-desc"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="delete-folder-title" className="modal-title">
+              Delete &ldquo;{modalFolder.name}&rdquo;?
+            </h2>
+            <p id="delete-folder-desc" className="modal-desc">
+              This will permanently delete the folder <strong>{modalFolder.name}</strong> and all files or subfolders inside it. This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={deletingFolderBusy}
+                onClick={() => {
+                  setModal(null);
+                  setModalFolder(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-danger"
+                disabled={deletingFolderBusy}
+                aria-busy={deletingFolderBusy}
+                onClick={confirmDeleteFolder}
+              >
+                {deletingFolderBusy ? <div className="spinner" aria-hidden="true"></div> : "Delete Permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {modal === "moveFiles" && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal glass-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">Move {mailSelected.size} file(s) to...</div>
-            <div className="folder-picker">
+          <div
+            className="modal glass-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="move-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="move-modal-title" className="modal-title">
+              Move {mailSelected.size} file(s) to...
+            </h2>
+            <div className="folder-picker" role="listbox" aria-label="Target folder">
               <button
+                type="button"
+                role="option"
+                aria-selected={moveTarget === null}
                 className={`move-option ${moveTarget === null ? "selected" : ""}`}
                 onClick={() => setMoveTarget(null)}
               >
-                <span className="file-icon">📁</span> Root folder
+                <span className="file-icon" aria-hidden="true">📁</span> Root folder
               </button>
               {renderFolderTree(null, 0).map((folder) => (
                 <button
+                  type="button"
+                  role="option"
+                  aria-selected={moveTarget === folder.id}
                   key={folder.id}
                   className={`move-option ${moveTarget === folder.id ? "selected" : ""}`}
                   style={{ paddingLeft: `${16 + folderDepth(folder) * 22}px` }}
                   onClick={() => setMoveTarget(folder.id)}
                 >
-                  <span className="file-icon">📁</span> {folder.name}
+                  <span className="file-icon" aria-hidden="true">📁</span> {folder.name}
                 </button>
               ))}
             </div>
             <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => setModal(null)}>Cancel</button>
-              <button className="btn-primary" disabled={moving} onClick={handleMoveFiles}>
-                {moving ? <div className="spinner"></div> : `Move here`}
+              <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={moving}
+                aria-busy={moving}
+                onClick={handleMoveFiles}
+              >
+                {moving ? <div className="spinner" aria-hidden="true"></div> : "Move here"}
               </button>
             </div>
           </div>
@@ -1225,40 +1747,70 @@ export default function DashboardClient({ email }: { email: string }) {
 
       {clipboardOpen && (
         <div className="drawer-overlay" onClick={() => setClipboardOpen(false)}>
-          <aside className="clipboard-drawer glass-panel" onClick={(e) => e.stopPropagation()}>
+          <aside
+            id="clipboard-drawer"
+            className="clipboard-drawer glass-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clipboard-drawer-title"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="drawer-header">
               <div className="drawer-title-group">
-                <span className="drawer-icon">📋</span>
-                <h2 className="drawer-title">My Clipboard</h2>
+                <span className="drawer-icon" aria-hidden="true">📋</span>
+                <h2 id="clipboard-drawer-title" className="drawer-title">My Clipboard</h2>
               </div>
               <div className="drawer-header-actions">
                 <span className="shortcut-hint" title="Keyboard shortcut">Alt+C</span>
-                <button className="icon-btn" onClick={() => setClipboardOpen(false)} title="Close">✕</button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setClipboardOpen(false)}
+                  aria-label="Close Clipboard drawer"
+                  title="Close (Esc)"
+                >
+                  ✕
+                </button>
               </div>
             </div>
 
-            <div className="clipboard-tabs">
+            <div className="clipboard-tabs" role="tablist" aria-label="Clipboard sections">
               <button
+                type="button"
+                role="tab"
+                id="tab-scratchpad"
+                aria-selected={clipboardTab === "scratchpad"}
+                aria-controls="panel-scratchpad"
                 className={`clipboard-tab ${clipboardTab === "scratchpad" ? "active" : ""}`}
                 onClick={() => setClipboardTab("scratchpad")}
               >
-                📝 Scratchpad
+                <span aria-hidden="true">📝</span> Scratchpad
               </button>
               <button
+                type="button"
+                role="tab"
+                id="tab-clips"
+                aria-selected={clipboardTab === "clips"}
+                aria-controls="panel-clips"
                 className={`clipboard-tab ${clipboardTab === "clips" ? "active" : ""}`}
                 onClick={() => setClipboardTab("clips")}
               >
-                📌 Saved Clips ({clips.length})
+                <span aria-hidden="true">📌</span> Saved Clips ({clips.length})
               </button>
             </div>
 
             {clipboardTab === "scratchpad" ? (
-              <div className="scratchpad-view">
+              <div
+                id="panel-scratchpad"
+                role="tabpanel"
+                aria-labelledby="tab-scratchpad"
+                className="scratchpad-view"
+              >
                 <div className="scratchpad-meta">
-                  <div className="scratchpad-counts">
+                  <div className="scratchpad-counts" aria-live="polite">
                     {scratchpad.length} chars · {scratchpad.trim() ? scratchpad.trim().split(/\s+/).length : 0} words
                   </div>
-                  <div className={`save-status status-${scratchpadStatus}`}>
+                  <div className={`save-status status-${scratchpadStatus}`} role="status" aria-live="polite">
                     {scratchpadStatus === "saving" && "Saving..."}
                     {scratchpadStatus === "saved" && "Saved ✓"}
                     {scratchpadStatus === "error" && "Save error"}
@@ -1266,7 +1818,11 @@ export default function DashboardClient({ email }: { email: string }) {
                   </div>
                 </div>
 
+                <label htmlFor="scratchpad-input" className="sr-only">
+                  Scratchpad content
+                </label>
                 <textarea
+                  id="scratchpad-input"
                   className="scratchpad-textarea form-input"
                   placeholder="Paste or type text, links, code, or snippets here... Everything you type is saved automatically to your account and accessible anytime."
                   value={scratchpad}
@@ -1276,6 +1832,7 @@ export default function DashboardClient({ email }: { email: string }) {
 
                 <div className="scratchpad-actions">
                   <button
+                    type="button"
                     className="btn-primary"
                     disabled={!scratchpad}
                     onClick={handleCopyScratchpad}
@@ -1283,6 +1840,7 @@ export default function DashboardClient({ email }: { email: string }) {
                     {copiedScratchpad ? "Copied! ✓" : "📋 Copy All"}
                   </button>
                   <button
+                    type="button"
                     className="btn-secondary"
                     disabled={!scratchpad.trim() || savingClip}
                     onClick={handleSaveScratchpadAsClip}
@@ -1290,14 +1848,16 @@ export default function DashboardClient({ email }: { email: string }) {
                     💾 Save as Clip
                   </button>
                   <button
+                    type="button"
                     className="btn-secondary"
                     disabled={!scratchpad}
                     onClick={handleInsertScratchpadToMail}
                     title="Insert into Quick Mail body"
                   >
-                    ✉ To Mail
+                    ✉️ To Mail
                   </button>
                   <button
+                    type="button"
                     className="btn-secondary danger-text"
                     disabled={!scratchpad}
                     onClick={handleClearScratchpad}
@@ -1307,9 +1867,18 @@ export default function DashboardClient({ email }: { email: string }) {
                 </div>
               </div>
             ) : (
-              <div className="clips-view">
+              <div
+                id="panel-clips"
+                role="tabpanel"
+                aria-labelledby="tab-clips"
+                className="clips-view"
+              >
                 <div className="clip-add-form">
+                  <label htmlFor="new-clip-title" className="sr-only">
+                    Clip title (optional)
+                  </label>
                   <input
+                    id="new-clip-title"
                     type="text"
                     className="form-input clip-title-input"
                     placeholder="Clip title (optional)"
@@ -1317,7 +1886,11 @@ export default function DashboardClient({ email }: { email: string }) {
                     onChange={(e) => setNewClipTitle(e.target.value)}
                     maxLength={100}
                   />
+                  <label htmlFor="new-clip-content" className="sr-only">
+                    Clip content
+                  </label>
                   <textarea
+                    id="new-clip-content"
                     className="form-input clip-content-input"
                     placeholder="Clip content..."
                     rows={3}
@@ -1325,18 +1898,24 @@ export default function DashboardClient({ email }: { email: string }) {
                     onChange={(e) => setNewClipContent(e.target.value)}
                   />
                   <button
+                    type="button"
                     className="btn-primary"
                     disabled={!newClipContent.trim() || savingClip}
+                    aria-busy={savingClip}
                     onClick={handleAddClip}
                   >
-                    {savingClip ? <div className="spinner"></div> : "+ Save New Clip"}
+                    {savingClip ? <div className="spinner" aria-hidden="true"></div> : "+ Save New Clip"}
                   </button>
                 </div>
 
                 {clips.length > 0 && (
                   <div className="clip-search-bar">
+                    <label htmlFor="clip-search-input" className="sr-only">
+                      Search saved clips
+                    </label>
                     <input
-                      type="text"
+                      id="clip-search-input"
+                      type="search"
                       className="form-input search-input"
                       placeholder="🔍 Search clips..."
                       value={clipSearch}
@@ -1345,14 +1924,16 @@ export default function DashboardClient({ email }: { email: string }) {
                   </div>
                 )}
 
-                <div className="clips-list">
+                <div className="clips-list" role="list" aria-label="Saved clips">
                   {filteredClips.length === 0 ? (
-                    <div className="empty-clips">
-                      {clipSearch ? "No clips match your search." : "No saved clips yet. Add one above or save from your scratchpad!"}
+                    <div className="empty-clips" role="status">
+                      {clipSearch
+                        ? "No clips match your search."
+                        : "No saved clips yet. Add one above or save from your scratchpad!"}
                     </div>
                   ) : (
                     filteredClips.map((clip) => (
-                      <div className="clip-card" key={clip.id}>
+                      <div className="clip-card" role="listitem" key={clip.id}>
                         <div className="clip-card-header">
                           <span className="clip-card-title">{clip.title || "Untitled Clip"}</span>
                           <span className="clip-card-date">{formatDate(clip.createdAt)}</span>
@@ -1360,12 +1941,14 @@ export default function DashboardClient({ email }: { email: string }) {
                         <div className="clip-card-body">{clip.content}</div>
                         <div className="clip-card-footer">
                           <button
+                            type="button"
                             className="btn-secondary btn-sm"
                             onClick={() => handleCopyClip(clip)}
                           >
                             {copiedClipId === clip.id ? "Copied! ✓" : "Copy"}
                           </button>
                           <button
+                            type="button"
                             className="btn-secondary btn-sm"
                             onClick={() => handleSendClipToScratchpad(clip)}
                             title="Append to scratchpad"
@@ -1373,6 +1956,7 @@ export default function DashboardClient({ email }: { email: string }) {
                             To Scratchpad
                           </button>
                           <button
+                            type="button"
                             className="btn-secondary btn-sm"
                             onClick={() => handleInsertClipToMail(clip)}
                             title="Insert into Quick Mail"
@@ -1380,11 +1964,13 @@ export default function DashboardClient({ email }: { email: string }) {
                             To Mail
                           </button>
                           <button
+                            type="button"
                             className="icon-btn danger"
                             onClick={() => handleDeleteClip(clip.id)}
+                            aria-label={`Delete clip ${clip.title || "Untitled Clip"}`}
                             title="Delete clip"
                           >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <polyline points="3 6 5 6 21 6"></polyline>
                               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                             </svg>
@@ -1400,14 +1986,24 @@ export default function DashboardClient({ email }: { email: string }) {
         </div>
       )}
 
-      <div className="toast-container">
+      <div className="toast-container" role="region" aria-live="polite" aria-label="Notifications">
         {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast-${toast.type}`}>
-            <span className="toast-icon">{toast.type === "success" ? "✓" : "⚠"}</span>
+          <div key={toast.id} className={`toast toast-${toast.type}`} role="status">
+            <span className="toast-icon" aria-hidden="true">
+              {toast.type === "success" ? "✓" : "⚠"}
+            </span>
             <div className="toast-content">
               <div className="toast-title">{toast.title}</div>
               <div className="toast-message">{toast.message}</div>
             </div>
+            <button
+              type="button"
+              className="toast-close"
+              aria-label="Dismiss notification"
+              onClick={() => dismissToast(toast.id)}
+            >
+              ✕
+            </button>
           </div>
         ))}
       </div>

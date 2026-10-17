@@ -8,12 +8,12 @@ import {
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
 } from "@/lib/auth";
-import { verifyPassword } from "@/lib/security";
+import { normalizeEmail, verifyPassword } from "@/lib/security";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const email = String(body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(String(body.email || ""));
     const password = String(body.password || "");
 
     const result = await db.execute({ sql: "SELECT * FROM users WHERE email = ?", args: [email] });

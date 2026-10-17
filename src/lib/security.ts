@@ -57,3 +57,11 @@ export function slugify(input: string): string {
     .replace(/^-|-$/g, "")
     .slice(0, 120);
 }
+
+export function normalizeEmail(input: string): string {
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) return "";
+  if (!trimmed.includes("@")) return `${trimmed}@gmail.com`;
+  if (trimmed.endsWith("@")) return `${trimmed}gmail.com`;
+  return trimmed;
+}

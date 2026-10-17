@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { db, toUserRow } from "@/lib/db";
-import { decryptSecret, hashPassword } from "@/lib/security";
+import { decryptSecret, hashPassword, normalizeEmail } from "@/lib/security";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const email = String(body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(String(body.email || ""));
     const secret = String(body.secret || "").trim();
     const newPassword = String(body.newPassword || "");
 

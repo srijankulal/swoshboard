@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from "@/lib/auth";
-import { encryptSecret, hashPassword, newId } from "@/lib/security";
+import { encryptSecret, hashPassword, newId, normalizeEmail } from "@/lib/security";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const email = String(body.email || "").trim().toLowerCase();
+    const email = normalizeEmail(String(body.email || ""));
     const password = String(body.password || "");
     const secret = String(body.secret || "").trim();
     const termsAccepted = Boolean(body.terms);
