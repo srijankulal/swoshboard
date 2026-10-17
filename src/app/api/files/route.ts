@@ -6,25 +6,44 @@ import {
   MAX_FILE_SIZE_BYTES,
   STORAGE_LIMIT_BYTES,
   toFileRow,
+  toFolderRow,
   type FileRow,
+  type FolderRow,
 } from "@/lib/db";
 import { getResourceBytes } from "@/lib/cloudinary";
 import { newId } from "@/lib/security";
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
-  const [result, { usedBytes, fileCount }] = await Promise.all([
+  const url = new URL(request.url);
+  const includeFolders = url.searchParams.get("include") === "folders";
+
+  const [fileRes, folderRes] = await Promise.all([
     db.execute({
       sql: "SELECT * FROM files WHERE user_id = ? ORDER BY created_at DESC",
       args: [user.id],
     }),
-    getUsage(user.id),
+    includeFolders
+      ? db.execute({
+          sql: "SELECT * FROM folders WHERE user_id = ? ORDER BY name COLLATE NOCASE",
+          args: [user.id],
+        })
+      : Promise.resolve(null),
   ]);
-  const files: FileRow[] = result.rows.map((row) => toFileRow(row as Record<string, unknown>));
+
+  const files: FileRow[] = fileRes.rows.map((row) => toFileRow(row as Record<string, unknown>));
+  let usedBytes = 0;
+  for (const f of files) {
+    usedBytes += Number(f.size) || 0;
+  }
+
+  const folders: FolderRow[] | undefined = folderRes
+    ? folderRes.rows.map((row) => toFolderRow(row as Record<string, unknown>))
+    : undefined;
 
   return NextResponse.json({
     files: files.map((f) => ({
@@ -35,7 +54,17 @@ export async function GET() {
       folderId: f.folder_id,
       createdAt: f.created_at,
     })),
-    usage: { usedBytes, limitBytes: STORAGE_LIMIT_BYTES, fileCount },
+    usage: { usedBytes, limitBytes: STORAGE_LIMIT_BYTES, fileCount: files.length },
+    ...(folders
+      ? {
+          folders: folders.map((f) => ({
+            id: f.id,
+            name: f.name,
+            parentId: f.parent_id,
+            createdAt: f.created_at,
+          })),
+        }
+      : {}),
   });
 }
 

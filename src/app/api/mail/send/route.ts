@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const to = normalizeEmail(String(body.to || ""));
     const subject = String(body.subject || "").trim();
-    const text = String(body.text || "").trim();
+    const text = String(body.text || body.body || "").trim();
     const fileIds: string[] = Array.isArray(body.fileIds) ? body.fileIds.map(String) : [];
 
     if (!EMAIL_RE.test(to)) {

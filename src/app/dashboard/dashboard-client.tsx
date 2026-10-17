@@ -51,6 +51,7 @@ interface CollectEntry {
 
 type SortBy = "date-desc" | "date-asc" | "name-asc" | "size-desc" | "size-asc";
 type ThemeMode = "system" | "light" | "dark";
+type ViewMode = "list" | "grid";
 
 const CLOUDINARY_UPLOAD_URL = (cloudName: string) =>
   `https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`;
@@ -73,35 +74,35 @@ function formatDate(ms: number): string {
   });
 }
 
-function getFileVisual(name: string, mime: string): { icon: string; badge: string } {
+function getFileVisual(name: string, mime: string): { icon: string; badge: string; tone: string } {
   const lower = name.toLowerCase();
   const ext = lower.includes(".") ? lower.split(".").pop() || "" : "";
 
   if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"].includes(ext)) {
-    return { icon: "🖼️", badge: "IMG" };
+    return { icon: "🖼️", badge: "IMG", tone: "tone-indigo" };
   }
   if (mime === "application/pdf" || ext === "pdf") {
-    return { icon: "📕", badge: "PDF" };
+    return { icon: "📕", badge: "PDF", tone: "tone-rose" };
   }
   if (["zip", "rar", "7z", "tar", "gz", "tgz"].includes(ext) || mime.includes("zip") || mime.includes("compressed")) {
-    return { icon: "🗜️", badge: "ZIP" };
+    return { icon: "🗜️", badge: "ZIP", tone: "tone-amber" };
   }
   if (mime.startsWith("audio/") || ["mp3", "wav", "ogg", "flac", "m4a"].includes(ext)) {
-    return { icon: "🎵", badge: "AUD" };
+    return { icon: "🎵", badge: "AUD", tone: "tone-violet" };
   }
   if (mime.startsWith("video/") || ["mp4", "mkv", "mov", "webm"].includes(ext)) {
-    return { icon: "🎬", badge: "VID" };
+    return { icon: "🎬", badge: "VID", tone: "tone-violet" };
   }
   if (["js", "ts", "tsx", "jsx", "py", "json", "html", "css", "sql", "md", "sh", "yml", "yaml"].includes(ext)) {
-    return { icon: "💻", badge: ext.toUpperCase().slice(0, 4) };
+    return { icon: "💻", badge: ext.toUpperCase().slice(0, 4), tone: "tone-cyan" };
   }
   if (["csv", "xls", "xlsx"].includes(ext)) {
-    return { icon: "📊", badge: "DATA" };
+    return { icon: "📊", badge: "DATA", tone: "tone-emerald" };
   }
   if (["doc", "docx", "txt", "rtf", "odt"].includes(ext)) {
-    return { icon: "📝", badge: "DOC" };
+    return { icon: "📝", badge: "DOC", tone: "tone-blue" };
   }
-  return { icon: "📄", badge: ext ? ext.toUpperCase().slice(0, 4) : "FILE" };
+  return { icon: "📄", badge: ext ? ext.toUpperCase().slice(0, 4) : "FILE", tone: "tone-slate" };
 }
 
 function normalizeEmail(value: string): string {
@@ -162,6 +163,7 @@ export default function DashboardClient({ email }: { email: string }) {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("date-desc");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -182,13 +184,27 @@ export default function DashboardClient({ email }: { email: string }) {
   const [mailSubject, setMailSubject] = useState("");
   const [mailBody, setMailBody] = useState("");
   const [sendingMail, setSendingMail] = useState(false);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("swosh_recent_recipients");
+        if (raw) return JSON.parse(raw) as string[];
+      } catch {
+        // ignore
+      }
+    }
+    return [];
+  });
 
-  const [modal, setModal] = useState<null | "newFolder" | "renameFolder" | "moveFiles" | "deleteFolder">(null);
+  const [modal, setModal] = useState<
+    null | "newFolder" | "renameFolder" | "moveFiles" | "deleteFolder" | "bulkDelete"
+  >(null);
   const [modalFolder, setModalFolder] = useState<Folder | null>(null);
   const [folderNameInput, setFolderNameInput] = useState("");
   const [moveTarget, setMoveTarget] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   const [deletingFolderBusy, setDeletingFolderBusy] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -209,22 +225,19 @@ export default function DashboardClient({ email }: { email: string }) {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const uploadQueue = useRef<PendingUpload[]>([]);
-  const uploadTotalBytes = useRef(0);
-  const uploadDoneBytes = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const folderCache = useRef<Map<string, string | null>>(new Map());
 
   const addToast = useCallback((type: "success" | "danger", title: string, message: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, type, title, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4800);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
   }, []);
 
   const dismissToast = (id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Theme sync with document root and localStorage
   useEffect(() => {
     if (theme === "system") {
       document.documentElement.removeAttribute("data-theme");
@@ -234,7 +247,7 @@ export default function DashboardClient({ email }: { email: string }) {
     try {
       localStorage.setItem("swosh_theme", theme);
     } catch {
-      // ignore storage errors
+      // ignore
     }
   }, [theme]);
 
@@ -244,29 +257,23 @@ export default function DashboardClient({ email }: { email: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [res, folderRes] = await Promise.all([
-        fetch("/api/files"),
-        fetch("/api/folders"),
-      ]);
+      const res = await fetch("/api/files?include=folders");
       if (res.status === 401) {
         router.push("/login");
         return;
       }
-      const [data, folderData] = await Promise.all([
-        res.json(),
-        folderRes.json(),
-      ]);
+      const data = await res.json();
       if (res.ok) {
         setFiles(data.files);
         setUsage(data.usage);
+        if (Array.isArray(data.folders)) {
+          setFolders(data.folders);
+          folderCache.current.clear();
+        }
         setMailSelected((prev) => {
           const ids = new Set(data.files.map((f: StoredFile) => f.id));
           return new Set([...prev].filter((id) => ids.has(id)));
         });
-      }
-      if (folderRes.ok) {
-        setFolders(folderData.folders);
-        folderCache.current.clear();
       }
     } catch {
       addToast("danger", "Error", "Could not load your board.");
@@ -279,25 +286,21 @@ export default function DashboardClient({ email }: { email: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const [res, folderRes, clipRes] = await Promise.all([
-          fetch("/api/files"),
-          fetch("/api/folders"),
+        const [res, clipRes] = await Promise.all([
+          fetch("/api/files?include=folders"),
           fetch("/api/clipboard").catch(() => null),
         ]);
         if (res.status === 401) {
           router.push("/login");
           return;
         }
-        const [data, folderData] = await Promise.all([
-          res.json(),
-          folderRes.json(),
-        ]);
+        const data = await res.json();
         if (res.ok && !cancelled) {
           setFiles(data.files);
           setUsage(data.usage);
-        }
-        if (folderRes.ok && !cancelled) {
-          setFolders(folderData.folders);
+          if (Array.isArray(data.folders)) {
+            setFolders(data.folders);
+          }
         }
         if (clipRes && clipRes.ok && !cancelled) {
           const clipData = await clipRes.json();
@@ -314,30 +317,6 @@ export default function DashboardClient({ email }: { email: string }) {
       cancelled = true;
     };
   }, [addToast, router]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === "c" || e.key === "C")) {
-        e.preventDefault();
-        setClipboardOpen((prev) => !prev);
-        return;
-      }
-      if (e.key === "Escape") {
-        if (modal !== null) {
-          setModal(null);
-          setModalFolder(null);
-        } else if (clipboardOpen) {
-          setClipboardOpen(false);
-        } else if (mailOpen) {
-          setMailOpen(false);
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [modal, clipboardOpen, mailOpen]);
 
   const handleScratchpadChange = (newVal: string) => {
     setScratchpad(newVal);
@@ -518,6 +497,9 @@ export default function DashboardClient({ email }: { email: string }) {
           throw new Error(data.error || `Could not create folder "${name}".`);
         }
         folderId = data.folder?.id ?? null;
+        if (data.folder) {
+          setFolders((prev) => [...prev, data.folder]);
+        }
       }
       folderCache.current.set(key, folderId);
       parentId = folderId;
@@ -537,6 +519,236 @@ export default function DashboardClient({ email }: { email: string }) {
     return pending;
   };
 
+  // Concurrent upload pipeline (up to 3 parallel uploads)
+  const startUploads = useCallback(
+    async (items: PendingUpload[]) => {
+      const tooBig = items.filter((i) => i.file.size > 10 * 1024 * 1024);
+      const ok = items.filter((i) => i.file.size <= 10 * 1024 * 1024);
+      if (tooBig.length > 0) {
+        addToast(
+          "danger",
+          "Skipped Oversized Files",
+          `${tooBig.length} file(s) skipped: ${tooBig
+            .map((i) => i.file.name)
+            .slice(0, 3)
+            .join(", ")}${tooBig.length > 3 ? "..." : ""} (10 MB per-file limit).`
+        );
+      }
+      if (ok.length === 0) return;
+
+      setUploading(true);
+      setUploadProgress(0);
+      setUploadName(ok.length === 1 ? ok[0].file.name : `${ok.length} files`);
+
+      const totalBytes = ok.reduce((sum, i) => sum + i.file.size, 0) || 1;
+      const loadedByIndex = new Array<number>(ok.length).fill(0);
+      let cursor = 0;
+      let failed = false;
+
+      const updateProgress = () => {
+        const sum = loadedByIndex.reduce((a, b) => a + b, 0);
+        setUploadProgress(Math.min(100, Math.round((sum / totalBytes) * 100)));
+      };
+
+      const uploadSingle = async (idx: number, item: PendingUpload) => {
+        const file = item.file;
+        setUploadName(ok.length === 1 ? file.name : `${file.name} (${idx + 1}/${ok.length})`);
+
+        const signRes = await fetch("/api/files/upload-sign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: file.name,
+            size: file.size,
+            mime: file.type || "application/octet-stream",
+            folderId: item.folderId,
+          }),
+        });
+        const signData = await signRes.json();
+        if (!signRes.ok) {
+          throw new Error(signData.error || "Could not prepare upload.");
+        }
+        const upload = signData.upload as {
+          cloudName: string;
+          apiKey: string;
+          timestamp: number;
+          signature: string;
+          publicId: string;
+          resourceType: string;
+          deliveryType: string;
+        };
+
+        await new Promise<void>((resolve, reject) => {
+          const form = new FormData();
+          form.append("file", file);
+          form.append("public_id", upload.publicId);
+          form.append("api_key", upload.apiKey);
+          form.append("timestamp", String(upload.timestamp));
+          form.append("signature", upload.signature);
+          form.append("type", upload.deliveryType);
+          form.append("resource_type", upload.resourceType);
+
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", CLOUDINARY_UPLOAD_URL(upload.cloudName));
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              loadedByIndex[idx] = event.loaded;
+              updateProgress();
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              loadedByIndex[idx] = file.size;
+              updateProgress();
+              resolve();
+            } else {
+              let msg = `Storage upload returned ${xhr.status}.`;
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (data?.error?.message) msg = data.error.message;
+              } catch {
+                /* ignore */
+              }
+              reject(new Error(msg));
+            }
+          };
+          xhr.onerror = () => reject(new Error("Storage upload failed (network)."));
+          xhr.send(form);
+        });
+
+        const confirmRes = await fetch("/api/files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            publicId: upload.publicId,
+            name: file.name,
+            size: file.size,
+            mime: file.type || "application/octet-stream",
+            folderId: item.folderId,
+          }),
+        });
+        const confirmData = await confirmRes.json();
+        if (!confirmRes.ok) {
+          throw new Error(confirmData.error || "Could not register file.");
+        }
+        if (confirmData.file) {
+          const created = confirmData.file as StoredFile;
+          setFiles((prev) => [created, ...prev]);
+          setUsage((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  usedBytes: prev.usedBytes + created.size,
+                  fileCount: prev.fileCount + 1,
+                }
+              : prev
+          );
+        }
+      };
+
+      const worker = async () => {
+        while (!failed && cursor < ok.length) {
+          const idx = cursor++;
+          try {
+            await uploadSingle(idx, ok[idx]);
+          } catch (err) {
+            failed = true;
+            addToast("danger", "Upload Failed", err instanceof Error ? err.message : "Unknown error");
+          }
+        }
+      };
+
+      const concurrency = Math.min(3, ok.length);
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+      setUploading(false);
+      setUploadProgress(0);
+      folderCache.current.clear();
+      if (!failed) {
+        addToast(
+          "success",
+          "Upload Complete",
+          `${ok.length} ${ok.length === 1 ? "file" : "files"} backed up.`
+        );
+      } else {
+        await refresh();
+      }
+    },
+    [addToast, refresh]
+  );
+
+  // Global keyboard shortcuts & paste-to-upload
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+
+      if (e.altKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        setClipboardOpen((prev) => !prev);
+        return;
+      }
+      if (e.altKey && (e.key === "m" || e.key === "M")) {
+        e.preventDefault();
+        setMailOpen((prev) => !prev);
+        return;
+      }
+      if (e.altKey && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        setFolderNameInput("");
+        setModal("newFolder");
+        return;
+      }
+      if (e.key === "/" && !isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (modal !== null) {
+          setModal(null);
+          setModalFolder(null);
+        } else if (clipboardOpen) {
+          setClipboardOpen(false);
+        } else if (mailOpen) {
+          setMailOpen(false);
+        } else if (mailSelected.size > 0) {
+          setMailSelected(new Set());
+        }
+      }
+    };
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (isInput) return;
+
+      const pastedFiles = Array.from(e.clipboardData?.files || []);
+      if (pastedFiles.length > 0) {
+        e.preventDefault();
+        void startUploads(
+          pastedFiles.map((file) => ({ file, folderId: currentFolderId }))
+        );
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [modal, clipboardOpen, mailOpen, mailSelected.size, currentFolderId, startUploads]);
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
@@ -552,20 +764,22 @@ export default function DashboardClient({ email }: { email: string }) {
         }
         try {
           const pending = await buildPendingUploads(collected, currentFolderId);
-          startUploads(pending);
+          void startUploads(pending);
         } catch (err) {
           addToast("danger", "Upload Failed", err instanceof Error ? err.message : "Could not read dropped items.");
         }
       })();
     } else {
-      startUploads(Array.from(e.dataTransfer.files || []).map((file) => ({ file, folderId: currentFolderId })));
+      void startUploads(
+        Array.from(e.dataTransfer.files || []).map((file) => ({ file, folderId: currentFolderId }))
+      );
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || []);
     if (selected.length > 0) {
-      startUploads(selected.map((file) => ({ file, folderId: currentFolderId })));
+      void startUploads(selected.map((file) => ({ file, folderId: currentFolderId })));
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -581,139 +795,13 @@ export default function DashboardClient({ email }: { email: string }) {
       void (async () => {
         try {
           const pending = await buildPendingUploads(collected, currentFolderId);
-          startUploads(pending);
+          void startUploads(pending);
         } catch (err) {
           addToast("danger", "Upload Failed", err instanceof Error ? err.message : "Could not read folder.");
         }
       })();
     }
     if (folderInputRef.current) folderInputRef.current.value = "";
-  };
-
-  const startUploads = (items: PendingUpload[]) => {
-    const tooBig = items.filter((i) => i.file.size > 10 * 1024 * 1024);
-    const ok = items.filter((i) => i.file.size <= 10 * 1024 * 1024);
-    if (tooBig.length > 0) {
-      addToast(
-        "danger",
-        "Skipped Oversized Files",
-        `${tooBig.length} file(s) skipped: ${tooBig.map((i) => i.file.name).slice(0, 3).join(", ")}${tooBig.length > 3 ? "..." : ""} (10 MB per-file limit).`
-      );
-    }
-    uploadQueue.current = ok;
-    uploadTotalBytes.current = ok.reduce((sum, i) => sum + i.file.size, 0);
-    uploadDoneBytes.current = 0;
-    if (ok.length === 0) {
-      setUploading(false);
-      setUploadProgress(0);
-      return;
-    }
-    setUploading(true);
-    setUploadProgress(0);
-    void uploadNext();
-  };
-
-  const uploadNext = async () => {
-    const item = uploadQueue.current.shift();
-    if (!item) {
-      setUploading(false);
-      setUploadProgress(0);
-      folderCache.current.clear();
-      await refresh();
-      addToast("success", "Upload Complete", "All files have been backed up.");
-      return;
-    }
-    const file = item.file;
-    setUploadName(file.name);
-
-    try {
-      const signRes = await fetch("/api/files/upload-sign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: file.name,
-          size: file.size,
-          mime: file.type || "application/octet-stream",
-          folderId: item.folderId,
-        }),
-      });
-      const signData = await signRes.json();
-      if (!signRes.ok) {
-        throw new Error(signData.error || "Could not prepare upload.");
-      }
-      const upload = signData.upload as {
-        cloudName: string;
-        apiKey: string;
-        timestamp: number;
-        signature: string;
-        publicId: string;
-        resourceType: string;
-        deliveryType: string;
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        const form = new FormData();
-        form.append("file", file);
-        form.append("public_id", upload.publicId);
-        form.append("api_key", upload.apiKey);
-        form.append("timestamp", String(upload.timestamp));
-        form.append("signature", upload.signature);
-        form.append("type", upload.deliveryType);
-        form.append("resource_type", upload.resourceType);
-
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", CLOUDINARY_UPLOAD_URL(upload.cloudName));
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const done = uploadDoneBytes.current + event.loaded;
-            const total = uploadTotalBytes.current || 1;
-            setUploadProgress(Math.min(100, Math.round((done / total) * 100)));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            let msg = `Storage upload returned ${xhr.status}.`;
-            try {
-              const data = JSON.parse(xhr.responseText);
-              if (data?.error?.message) msg = data.error.message;
-            } catch {
-              /* ignore */
-            }
-            reject(new Error(msg));
-          }
-        };
-        xhr.onerror = () => reject(new Error("Storage upload failed (network)."));
-        xhr.send(form);
-      });
-      uploadDoneBytes.current += file.size;
-
-      const confirmRes = await fetch("/api/files", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicId: upload.publicId,
-          name: file.name,
-          size: file.size,
-          mime: file.type || "application/octet-stream",
-          folderId: item.folderId,
-        }),
-      });
-      const confirmData = await confirmRes.json();
-      if (!confirmRes.ok) {
-        throw new Error(confirmData.error || "Could not register file.");
-      }
-    } catch (err) {
-      addToast("danger", "Upload Failed", err instanceof Error ? err.message : "Unknown error");
-      uploadQueue.current = [];
-      setUploading(false);
-      setUploadProgress(0);
-      await refresh();
-      return;
-    }
-
-    void uploadNext();
   };
 
   const triggerBrowserDownload = async (url: string, filename: string) => {
@@ -769,7 +857,7 @@ export default function DashboardClient({ email }: { email: string }) {
         const res = await fetch(`/api/files/${file.id}`);
         const data = await res.json();
         if (res.ok && data.success && data.url) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
+          await new Promise((resolve) => setTimeout(resolve, 250));
           await triggerBrowserDownload(data.url, file.name);
         }
       } catch (err) {
@@ -808,6 +896,45 @@ export default function DashboardClient({ email }: { email: string }) {
       addToast("danger", "Delete Failed", err instanceof Error ? err.message : "Unknown error");
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(mailSelected);
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    try {
+      let deletedCount = 0;
+      let freedBytes = 0;
+      const deletedSet = new Set<string>();
+      await Promise.all(
+        ids.map(async (id) => {
+          const target = files.find((f) => f.id === id);
+          const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deletedCount += 1;
+            freedBytes += target?.size || 0;
+            deletedSet.add(id);
+          }
+        })
+      );
+      setFiles((prev) => prev.filter((f) => !deletedSet.has(f.id)));
+      setUsage((prev) =>
+        prev
+          ? {
+              ...prev,
+              usedBytes: Math.max(0, prev.usedBytes - freedBytes),
+              fileCount: Math.max(0, prev.fileCount - deletedCount),
+            }
+          : prev
+      );
+      setMailSelected(new Set());
+      setModal(null);
+      addToast("success", "Deleted", `Removed ${deletedCount} file(s).`);
+    } catch {
+      addToast("danger", "Delete Failed", "Could not delete some selected files.");
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -914,6 +1041,24 @@ export default function DashboardClient({ email }: { email: string }) {
     });
   };
 
+  const handleQuickMailSingle = (file: StoredFile) => {
+    setMailSelected((prev) => {
+      const next = new Set(prev);
+      next.add(file.id);
+      return next;
+    });
+    if (!mailTo) {
+      setMailTo(email);
+    }
+    setMailOpen(true);
+  };
+
+  const handleQuickMoveSingle = (file: StoredFile) => {
+    setMailSelected(new Set([file.id]));
+    setMoveTarget(file.folderId);
+    setModal("moveFiles");
+  };
+
   const handleSendMail = async () => {
     const finalTo = normalizeEmail(mailTo);
     setMailTo(finalTo);
@@ -937,9 +1082,20 @@ export default function DashboardClient({ email }: { email: string }) {
       if (!res.ok) {
         throw new Error(data.error || "Could not send mail.");
       }
+      // Save to recent recipients
+      const updatedRecents = [
+        finalTo,
+        ...recentRecipients.filter((r) => r.toLowerCase() !== finalTo.toLowerCase()),
+      ].slice(0, 4);
+      setRecentRecipients(updatedRecents);
+      try {
+        localStorage.setItem("swosh_recent_recipients", JSON.stringify(updatedRecents));
+      } catch {
+        // ignore
+      }
+
       addToast("success", "Mail Sent", data.message || "Email dispatched via Swoshmail.");
       setMailOpen(false);
-      setMailTo("");
       setMailSubject("");
       setMailBody("");
       setMailSelected(new Set());
@@ -950,8 +1106,10 @@ export default function DashboardClient({ email }: { email: string }) {
     }
   };
 
-  const percent = usage && usage.limitBytes > 0 ? Math.min(100, (usage.usedBytes / usage.limitBytes) * 100) : 0;
+  const percent =
+    usage && usage.limitBytes > 0 ? Math.min(100, (usage.usedBytes / usage.limitBytes) * 100) : 0;
   const selectedFiles = files.filter((f) => mailSelected.has(f.id));
+  const selectedTotalBytes = selectedFiles.reduce((acc, f) => acc + f.size, 0);
 
   // Precompute file counts per folder in O(N)
   const folderFileCounts = new Map<string | null, number>();
@@ -1034,8 +1192,22 @@ export default function DashboardClient({ email }: { email: string }) {
     );
   });
 
+  const currentFolderName =
+    breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1].name : "Root";
+
   return (
-    <div className="dashboard-body">
+    <div
+      className="dashboard-body"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!isDragging) setIsDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setIsDragging(false);
+      }}
+      onDrop={handleDrop}
+    >
       <a href="#board-main" className="skip-link">
         Skip to files and folders
       </a>
@@ -1051,9 +1223,10 @@ export default function DashboardClient({ email }: { email: string }) {
           </div>
           <div>
             <span className="logo-text">Swoshboard</span>
-            <span className="logo-badge">CLOUD BACKUP</span>
+            <span className="logo-badge">PERSONAL CLOUD &amp; MAIL</span>
           </div>
         </div>
+
         <div className="header-actions">
           <button
             type="button"
@@ -1069,6 +1242,23 @@ export default function DashboardClient({ email }: { email: string }) {
               {theme === "light" ? "Light" : theme === "dark" ? "Dark" : "Auto"}
             </span>
           </button>
+
+          <button
+            type="button"
+            className={`btn-secondary ${mailOpen ? "active-pill" : ""}`}
+            onClick={() => {
+              if (!mailOpen && !mailTo) setMailTo(email);
+              setMailOpen(!mailOpen);
+            }}
+            aria-expanded={mailOpen}
+            title="Quick Mail (Alt+M)"
+          >
+            <span aria-hidden="true">✉️</span> Quick Mail
+            {mailSelected.size > 0 && (
+              <span className="header-badge">{mailSelected.size}</span>
+            )}
+          </button>
+
           <button
             type="button"
             className={`btn-secondary clipboard-toggle-btn ${clipboardOpen ? "active" : ""}`}
@@ -1078,16 +1268,80 @@ export default function DashboardClient({ email }: { email: string }) {
             title="Open Clipboard (Alt+C)"
           >
             <span aria-hidden="true">📋</span> Clipboard
-            {clips.length > 0 && <span className="header-badge" aria-label={`${clips.length} saved clips`}>{clips.length}</span>}
+            {clips.length > 0 && (
+              <span className="header-badge" aria-label={`${clips.length} saved clips`}>
+                {clips.length}
+              </span>
+            )}
           </button>
+
           <span className="user-chip" title={email} aria-label={`Signed in as ${email}`}>
             {email}
           </span>
           <button type="button" className="btn-secondary" onClick={handleLogout}>
-            Lock
+            Sign Out
           </button>
         </div>
       </header>
+
+      {/* Overview Stats Strip */}
+      <section className="stats-strip" aria-label="Account overview">
+        <div className="stat-card glass-panel">
+          <div className="stat-card-top">
+            <span className="stat-label">Storage Quota</span>
+            <span className="stat-pill">{Math.round(percent)}%</span>
+          </div>
+          <div className="stat-value">
+            {usage ? `${formatBytes(usage.usedBytes)} / ${formatBytes(usage.limitBytes)}` : "—"}
+          </div>
+          <div
+            className="usage-bar"
+            role="progressbar"
+            aria-label="Storage quota usage"
+            aria-valuenow={Math.round(percent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className={`usage-bar-fill ${percent > 85 ? "usage-high" : ""}`}
+              style={{ width: `${percent}%` }}
+            ></div>
+          </div>
+        </div>
+
+        <div className="stat-card glass-panel">
+          <div className="stat-card-top">
+            <span className="stat-label">Backed Up Files</span>
+            <span className="stat-emoji" aria-hidden="true">📦</span>
+          </div>
+          <div className="stat-value">{usage ? usage.fileCount : files.length}</div>
+          <div className="stat-sub">{folders.length} folder(s) organized</div>
+        </div>
+
+        <div
+          className="stat-card glass-panel stat-card-interactive"
+          role="button"
+          tabIndex={0}
+          onClick={() => setClipboardOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setClipboardOpen(true);
+            }
+          }}
+        >
+          <div className="stat-card-top">
+            <span className="stat-label">Cloud Clipboard</span>
+            <span className="shortcut-hint">Alt+C</span>
+          </div>
+          <div className="stat-value">{clips.length} Clips</div>
+          <div className="stat-sub">
+            {scratchpad.trim()
+              ? `Scratchpad: ${scratchpad.trim().split(/\s+/).length} words`
+              : "Click to open scratchpad & clips"}
+          </div>
+        </div>
+      </section>
 
       <main id="board-main" className="dashboard-grid">
         <section className="board-panel glass-panel" aria-labelledby="board-heading">
@@ -1095,23 +1349,46 @@ export default function DashboardClient({ email }: { email: string }) {
             <div className="panel-title-wrap">
               <h1 id="board-heading" className="panel-title">My Backup Space</h1>
               <span className="usage-label">
-                {usage
-                  ? `${formatBytes(usage.usedBytes)} of ${formatBytes(usage.limitBytes)} (${Math.round(percent)}%) · ${usage.fileCount} file(s)`
-                  : "Loading storage metrics..."}
+                Viewing <strong>{currentFolderName}</strong> · Drop or paste files anywhere to upload
               </span>
             </div>
-            <div
-              className="usage-bar"
-              role="progressbar"
-              aria-label="Storage quota usage"
-              aria-valuenow={Math.round(percent)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                className={`usage-bar-fill ${percent > 85 ? "usage-high" : ""}`}
-                style={{ width: `${percent}%` }}
-              ></div>
+
+            <div className="board-toolbar">
+              <button
+                type="button"
+                className="btn-primary btn-auto"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <span aria-hidden="true">＋</span> Upload Files
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => folderInputRef.current?.click()}
+              >
+                <span aria-hidden="true">📂</span> Upload Folder
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setModal("newFolder");
+                  setFolderNameInput("");
+                }}
+                title="Create new folder (Alt+N)"
+              >
+                <span aria-hidden="true">📁</span> New Folder
+              </button>
+              <input
+                type="file"
+                ref={folderInputRef}
+                onChange={handleFolderChange}
+                style={{ display: "none" }}
+                multiple
+                aria-hidden="true"
+                tabIndex={-1}
+                {...{ webkitdirectory: "" }}
+              />
             </div>
           </div>
 
@@ -1148,44 +1425,6 @@ export default function DashboardClient({ email }: { email: string }) {
             })}
           </nav>
 
-          <div className="board-toolbar">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setModal("newFolder");
-                setFolderNameInput("");
-              }}
-            >
-              <span aria-hidden="true">+</span> New Folder
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <span aria-hidden="true">📄</span> Upload Files
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => folderInputRef.current?.click()}
-            >
-              <span aria-hidden="true">⬆️</span> Upload Folder
-            </button>
-            <span className="toolbar-note">Max {formatBytes(10 * 1024 * 1024)} per file</span>
-            <input
-              type="file"
-              ref={folderInputRef}
-              onChange={handleFolderChange}
-              style={{ display: "none" }}
-              multiple
-              aria-hidden="true"
-              tabIndex={-1}
-              {...{ webkitdirectory: "" }}
-            />
-          </div>
-
           <div
             role="button"
             tabIndex={0}
@@ -1204,12 +1443,6 @@ export default function DashboardClient({ email }: { email: string }) {
                 fileInputRef.current?.click();
               }
             }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
           >
             <input
               type="file"
@@ -1220,14 +1453,22 @@ export default function DashboardClient({ email }: { email: string }) {
               aria-hidden="true"
               tabIndex={-1}
             />
-            <div className="dropzone-icon" aria-hidden="true">
-              {uploading ? "⏳" : isDragging ? "📥" : "📦"}
-            </div>
-            <div className="dropzone-title">
-              {uploading ? `Uploading ${uploadName}...` : "Drop files or folders here"}
-            </div>
-            <div className="dropzone-subtitle">
-              or click / press Enter to browse · folder hierarchies are preserved
+            <div className="dropzone-content">
+              <div className="dropzone-icon" aria-hidden="true">
+                {uploading ? "⏳" : isDragging ? "📥" : "☁️"}
+              </div>
+              <div className="dropzone-text">
+                <div className="dropzone-title">
+                  {uploading
+                    ? `Uploading ${uploadName}...`
+                    : isDragging
+                      ? `Drop to upload into "${currentFolderName}"`
+                      : "Drag & drop files or folders here, or click to browse"}
+                </div>
+                <div className="dropzone-subtitle">
+                  Supports any file type up to 10 MB · Press <kbd>Ctrl+V</kbd> anywhere to paste files
+                </div>
+              </div>
             </div>
             {uploading && (
               <div
@@ -1254,9 +1495,10 @@ export default function DashboardClient({ email }: { email: string }) {
                 </label>
                 <input
                   id="board-search"
+                  ref={searchInputRef}
                   type="search"
                   className="form-input filter-search-input"
-                  placeholder="Search files & folders..."
+                  placeholder="Search files & folders... (Press /)"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -1277,6 +1519,28 @@ export default function DashboardClient({ email }: { email: string }) {
                   <option value="size-desc">Size (Largest)</option>
                   <option value="size-asc">Size (Smallest)</option>
                 </select>
+
+                <div className="view-toggle" role="group" aria-label="View layout">
+                  <button
+                    type="button"
+                    className={`view-toggle-btn ${viewMode === "list" ? "active" : ""}`}
+                    onClick={() => setViewMode("list")}
+                    aria-pressed={viewMode === "list"}
+                    title="List view"
+                  >
+                    ☰
+                  </button>
+                  <button
+                    type="button"
+                    className={`view-toggle-btn ${viewMode === "grid" ? "active" : ""}`}
+                    onClick={() => setViewMode("grid")}
+                    aria-pressed={viewMode === "grid"}
+                    title="Grid view"
+                  >
+                    ⊞
+                  </button>
+                </div>
+
                 {visibleFiles.length > 0 && (
                   <button
                     type="button"
@@ -1303,12 +1567,16 @@ export default function DashboardClient({ email }: { email: string }) {
                 <p>No files or folders match &ldquo;{searchQuery}&rdquo;.</p>
               ) : (
                 <p>
-                  Nothing in this folder yet. Drop files or a whole folder above, or create a subfolder — anything stored here can be emailed anytime via Swoshmail.
+                  This folder is empty. Drop files above, paste from your clipboard (<kbd>Ctrl+V</kbd>), or create a folder to organize your backups.
                 </p>
               )}
             </div>
           ) : (
-            <div className="file-list" role="list" aria-label="Folders and files">
+            <div
+              className={`file-list ${viewMode === "grid" ? "file-grid" : ""}`}
+              role="list"
+              aria-label="Folders and files"
+            >
               {visibleFolders.map((folder) => {
                 const count = folderFileCounts.get(folder.id) || 0;
                 return (
@@ -1322,7 +1590,7 @@ export default function DashboardClient({ email }: { email: string }) {
                       }}
                       aria-label={`Open folder ${folder.name}, contains ${count} file(s)`}
                     >
-                      <span className="file-icon" aria-hidden="true">📁</span>
+                      <span className="file-icon-tile tone-amber" aria-hidden="true">📁</span>
                       <div className="file-meta">
                         <div className="file-name" title={folder.name}>{folder.name}</div>
                         <div className="file-sub">
@@ -1388,7 +1656,9 @@ export default function DashboardClient({ email }: { email: string }) {
                       className="file-info file-select-trigger"
                       onClick={() => toggleMailSelect(file.id)}
                     >
-                      <span className="file-icon" aria-hidden="true">{visual.icon}</span>
+                      <span className={`file-icon-tile ${visual.tone}`} aria-hidden="true">
+                        {visual.icon}
+                      </span>
                       <div className="file-meta">
                         <div className="file-name-row">
                           <span className="file-name" title={file.name}>{file.name}</span>
@@ -1400,6 +1670,29 @@ export default function DashboardClient({ email }: { email: string }) {
                       </div>
                     </div>
                     <div className="file-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Email ${file.name}`}
+                        title="Quick Mail this file"
+                        onClick={() => handleQuickMailSingle(file)}
+                      >
+                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                          <polyline points="22,6 12,13 2,6"></polyline>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Move ${file.name}`}
+                        title="Move to folder"
+                        onClick={() => handleQuickMoveSingle(file)}
+                      >
+                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                      </button>
                       <button
                         type="button"
                         className="icon-btn"
@@ -1432,49 +1725,15 @@ export default function DashboardClient({ email }: { email: string }) {
               })}
             </div>
           )}
-
-          <div className="mail-launch" role="region" aria-label="Bulk actions for selected files">
-            <div className="bulk-actions">
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={mailSelected.size === 0}
-                onClick={() => setMailOpen(true)}
-              >
-                <span aria-hidden="true">✉️</span> Mail {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={mailSelected.size === 0}
-                onClick={handleBulkDownload}
-              >
-                <span aria-hidden="true">⬇️</span> Download {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={mailSelected.size === 0}
-                onClick={() => {
-                  setMoveTarget(null);
-                  setModal("moveFiles");
-                }}
-              >
-                <span aria-hidden="true">📁</span> Move {mailSelected.size > 0 ? `${mailSelected.size} file(s)` : "files"}
-              </button>
-            </div>
-            <span className="agency-note">
-              {mailSelected.size > 0
-                ? `${mailSelected.size} file(s) selected (${formatBytes(selectedFiles.reduce((acc, f) => acc + f.size, 0))})`
-                : "Select files above to email via Swoshmail, download, or move between folders"}
-            </span>
-          </div>
         </section>
 
         {mailOpen && (
           <aside className="mail-panel glass-panel" aria-labelledby="quick-mail-heading">
             <div className="panel-head">
-              <h2 id="quick-mail-heading" className="panel-title">Quick Mail</h2>
+              <div>
+                <h2 id="quick-mail-heading" className="panel-title">Quick Mail</h2>
+                <span className="usage-label">Dispatched securely via Swoshmail</span>
+              </div>
               <button
                 type="button"
                 className="icon-btn"
@@ -1485,17 +1744,49 @@ export default function DashboardClient({ email }: { email: string }) {
               </button>
             </div>
 
-            <div className="mail-attachment-list" aria-label="Selected attachments">
-              {selectedFiles.map((f) => (
-                <div className="mail-attachment" key={f.id}>
-                  <span className="mail-attachment-name" title={f.name}>📎 {f.name}</span>
-                  <span className="mail-attachment-size">{formatBytes(f.size)}</span>
+            {selectedFiles.length > 0 ? (
+              <div className="mail-attachment-list" aria-label="Selected attachments">
+                <div className="mail-attachment-head">
+                  <span>{selectedFiles.length} Attachment(s)</span>
+                  <span>{formatBytes(selectedTotalBytes)}</span>
                 </div>
-              ))}
-            </div>
+                {selectedFiles.map((f) => (
+                  <div className="mail-attachment" key={f.id}>
+                    <span className="mail-attachment-name" title={f.name}>📎 {f.name}</span>
+                    <button
+                      type="button"
+                      className="attachment-remove-btn"
+                      onClick={() => toggleMailSelect(f.id)}
+                      aria-label={`Remove ${f.name} from email`}
+                      title="Remove attachment"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mail-empty-attachments">
+                No file attachments selected — you can send a text note directly or check files on the left to attach them.
+              </div>
+            )}
 
             <div className="form-group">
-              <label htmlFor="mail-to" className="form-label">To</label>
+              <div className="form-label-row">
+                <label htmlFor="mail-to" className="form-label" style={{ marginBottom: 0 }}>
+                  To
+                </label>
+                {mailTo.toLowerCase() !== email.toLowerCase() && (
+                  <button
+                    type="button"
+                    className="link-btn"
+                    style={{ fontSize: "12px" }}
+                    onClick={() => setMailTo(email)}
+                  >
+                    + Send to myself
+                  </button>
+                )}
+              </div>
               <div className="input-wrapper">
                 <input
                   id="mail-to"
@@ -1515,18 +1806,39 @@ export default function DashboardClient({ email }: { email: string }) {
                   <span className="email-domain-hint" aria-hidden="true">@gmail.com</span>
                 )}
               </div>
+
+              {recentRecipients.length > 0 && (
+                <div className="recipient-pills" aria-label="Recent recipients">
+                  {recentRecipients.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      className={`recipient-pill ${mailTo === r ? "active" : ""}`}
+                      onClick={() => setMailTo(r)}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+
             <div className="form-group">
               <label htmlFor="mail-subject" className="form-label">Subject</label>
               <input
                 id="mail-subject"
                 type="text"
                 className="form-input"
-                placeholder="Backup files from Swoshboard"
+                placeholder={
+                  selectedFiles.length > 0
+                    ? `Swoshboard: ${selectedFiles[0].name}${selectedFiles.length > 1 ? ` (+${selectedFiles.length - 1} more)` : ""}`
+                    : "Note from Swoshboard"
+                }
                 value={mailSubject}
                 onChange={(e) => setMailSubject(e.target.value)}
               />
             </div>
+
             <div className="form-group">
               <div className="form-label-row">
                 <label htmlFor="mail-body" className="form-label" style={{ marginBottom: 0 }}>
@@ -1547,7 +1859,7 @@ export default function DashboardClient({ email }: { email: string }) {
                 id="mail-body"
                 className="form-input"
                 rows={4}
-                placeholder="Anything you want to say with the files..."
+                placeholder="Write a message or paste notes..."
                 value={mailBody}
                 onChange={(e) => setMailBody(e.target.value)}
               ></textarea>
@@ -1556,7 +1868,7 @@ export default function DashboardClient({ email }: { email: string }) {
             <button
               type="button"
               className="btn-primary"
-              disabled={sendingMail || selectedFiles.length === 0}
+              disabled={sendingMail || (!mailBody.trim() && selectedFiles.length === 0)}
               aria-busy={sendingMail}
               onClick={handleSendMail}
             >
@@ -1565,6 +1877,63 @@ export default function DashboardClient({ email }: { email: string }) {
           </aside>
         )}
       </main>
+
+      {/* Floating Bulk Action Bar */}
+      {mailSelected.size > 0 && (
+        <div className="floating-action-bar glass-panel" role="region" aria-label="Selected files actions">
+          <div className="floating-bar-info">
+            <span className="selection-count-badge">{mailSelected.size}</span>
+            <span>
+              selected ({formatBytes(selectedTotalBytes)})
+            </span>
+          </div>
+          <div className="floating-bar-buttons">
+            <button
+              type="button"
+              className="btn-primary btn-auto"
+              onClick={() => {
+                if (!mailTo) setMailTo(email);
+                setMailOpen(true);
+              }}
+            >
+              <span aria-hidden="true">✉️</span> Mail
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleBulkDownload}
+            >
+              <span aria-hidden="true">⬇️</span> Download
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setMoveTarget(null);
+                setModal("moveFiles");
+              }}
+            >
+              <span aria-hidden="true">📁</span> Move
+            </button>
+            <button
+              type="button"
+              className="btn-secondary danger-text"
+              onClick={() => setModal("bulkDelete")}
+            >
+              <span aria-hidden="true">🗑️</span> Delete
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setMailSelected(new Set())}
+              aria-label="Clear selection"
+              title="Clear selection (Esc)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       <footer className="sw-footer">
         <span className="powered-by">
@@ -1691,6 +2060,50 @@ export default function DashboardClient({ email }: { email: string }) {
         </div>
       )}
 
+      {modal === "bulkDelete" && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!bulkDeleting) setModal(null);
+          }}
+        >
+          <div
+            className="modal glass-panel"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="bulk-delete-title"
+            aria-describedby="bulk-delete-desc"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="bulk-delete-title" className="modal-title">
+              Delete {mailSelected.size} selected file(s)?
+            </h2>
+            <p id="bulk-delete-desc" className="modal-desc">
+              This will permanently remove {mailSelected.size} file(s) ({formatBytes(selectedTotalBytes)}) from your Swoshboard storage. This cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={bulkDeleting}
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary btn-danger"
+                disabled={bulkDeleting}
+                aria-busy={bulkDeleting}
+                onClick={handleBulkDelete}
+              >
+                {bulkDeleting ? <div className="spinner" aria-hidden="true"></div> : "Delete Files"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {modal === "moveFiles" && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div
@@ -1711,7 +2124,7 @@ export default function DashboardClient({ email }: { email: string }) {
                 className={`move-option ${moveTarget === null ? "selected" : ""}`}
                 onClick={() => setMoveTarget(null)}
               >
-                <span className="file-icon" aria-hidden="true">📁</span> Root folder
+                <span className="file-icon" aria-hidden="true">🏠</span> Root folder
               </button>
               {renderFolderTree(null, 0).map((folder) => (
                 <button
