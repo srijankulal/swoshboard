@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { LabStudioModal } from "./lab-studio-modal";
 
 interface StoredFile {
   id: string;
@@ -208,6 +209,11 @@ export default function DashboardClient({ email }: { email: string }) {
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Lab Studio & AI Assistant state
+  const [labStudioOpen, setLabStudioOpen] = useState(false);
+  const [labStudioFile, setLabStudioFile] = useState<StoredFile | null>(null);
+  const [labStudioMode, setLabStudioMode] = useState<"compiler" | "assistant">("compiler");
 
   // Clipboard state
   const [clipboardOpen, setClipboardOpen] = useState(false);
@@ -688,6 +694,11 @@ export default function DashboardClient({ email }: { email: string }) {
           target.tagName === "SELECT" ||
           target.isContentEditable);
 
+      if (e.altKey && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        setLabStudioOpen((prev) => !prev);
+        return;
+      }
       if (e.altKey && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
         setClipboardOpen((prev) => !prev);
@@ -710,7 +721,9 @@ export default function DashboardClient({ email }: { email: string }) {
         return;
       }
       if (e.key === "Escape") {
-        if (modal !== null) {
+        if (labStudioOpen) {
+          setLabStudioOpen(false);
+        } else if (modal !== null) {
           setModal(null);
           setModalFolder(null);
         } else if (clipboardOpen) {
@@ -747,7 +760,7 @@ export default function DashboardClient({ email }: { email: string }) {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("paste", handlePaste);
     };
-  }, [modal, clipboardOpen, mailOpen, mailSelected.size, currentFolderId, startUploads]);
+  }, [modal, clipboardOpen, mailOpen, mailSelected.size, currentFolderId, startUploads, labStudioOpen]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -1275,6 +1288,20 @@ export default function DashboardClient({ email }: { email: string }) {
             )}
           </button>
 
+          <button
+            type="button"
+            className={`btn-secondary lab-toggle-btn ${labStudioOpen ? "active-pill" : ""}`}
+            onClick={() => {
+              setLabStudioFile(null);
+              setLabStudioMode("compiler");
+              setLabStudioOpen(true);
+            }}
+            title="Lab Studio Compiler & AI Assistant (Alt+L)"
+            aria-label="Open Lab Studio & AI Assistant"
+          >
+            <span aria-hidden="true">🧪</span> Lab Studio
+          </button>
+
           <span className="user-chip" title={email} aria-label={`Signed in as ${email}`}>
             {email}
           </span>
@@ -1673,6 +1700,32 @@ export default function DashboardClient({ email }: { email: string }) {
                       <button
                         type="button"
                         className="icon-btn"
+                        aria-label={`Open ${file.name} in Lab Studio Compiler`}
+                        title="Run in Lab Studio Compiler (Alt+L)"
+                        onClick={() => {
+                          setLabStudioFile(file);
+                          setLabStudioMode("compiler");
+                          setLabStudioOpen(true);
+                        }}
+                      >
+                        <span aria-hidden="true">⚡</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Analyze ${file.name} with AI Lab Assistant`}
+                        title="AI Lab Assistant: Format Record, Test Cases & Viva"
+                        onClick={() => {
+                          setLabStudioFile(file);
+                          setLabStudioMode("assistant");
+                          setLabStudioOpen(true);
+                        }}
+                      >
+                        <span aria-hidden="true">✨</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
                         aria-label={`Email ${file.name}`}
                         title="Quick Mail this file"
                         onClick={() => handleQuickMailSingle(file)}
@@ -1897,6 +1950,19 @@ export default function DashboardClient({ email }: { email: string }) {
               }}
             >
               <span aria-hidden="true">✉️</span> Mail
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                const firstSelected = files.find((f) => mailSelected.has(f.id));
+                setLabStudioFile(firstSelected || null);
+                setLabStudioMode("compiler");
+                setLabStudioOpen(true);
+              }}
+              title="Open selected file in Lab Studio (Alt+L)"
+            >
+              <span aria-hidden="true">🧪</span> Lab Studio
             </button>
             <button
               type="button"
@@ -2398,6 +2464,16 @@ export default function DashboardClient({ email }: { email: string }) {
           </aside>
         </div>
       )}
+
+      {/* Lab Studio Modal (Compiler & AI Assistant) */}
+      <LabStudioModal
+        isOpen={labStudioOpen}
+        onClose={() => setLabStudioOpen(false)}
+        files={files.map((f) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size }))}
+        initialFile={labStudioFile}
+        initialMode={labStudioMode}
+        onToast={addToast}
+      />
 
       <div className="toast-container" role="region" aria-live="polite" aria-label="Notifications">
         {toasts.map((toast) => (
