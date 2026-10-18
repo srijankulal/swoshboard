@@ -42,7 +42,13 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         { status: fetchRes.status }
       );
     }
-    const content = await fetchRes.text();
+    const isPdf =
+      row.mime_type === "application/pdf" ||
+      row.name.toLowerCase().endsWith(".pdf");
+
+    const arrayBuf = await fetchRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+
     return NextResponse.json({
       success: true,
       file: {
@@ -50,7 +56,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         name: row.name,
         mime: row.mime_type,
         size: row.size,
-        content,
+        content: isPdf ? "" : buffer.toString("utf-8"),
+        base64: isPdf ? buffer.toString("base64") : undefined,
+        isPdf,
       },
     });
   } catch (err) {

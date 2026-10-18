@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { resolveSignedDownloadUrl } from "@/lib/cloudinary";
 import {
   callGeminiApi,
   detectLabSubject,
   extractJsonFromResponse,
+  GeminiApiError,
   LabAnalysisResult,
 } from "@/lib/gemini";
 import { simulateOracleSqlExecution } from "@/lib/sqlplus-emulator";
+
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const user = await getSessionUser();
@@ -15,18 +20,101 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body = await request.json();
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body.", code: "INVALID_BODY" }, { status: 400 });
+    }
+
     const {
       message = "",
       fileName = "program.txt",
       fileContent = "",
       manualText = "",
+      manualPdfBase64: inputPdfBase64,
+      manualFileId,
       subject: requestedSubject,
       mode = "structure", // 'structure' | 'chat' | 'testcases' | 'viva' | 'fix'
       history = [],
       apiKey,
       model = "gemini-2.5-flash",
-    } = body;
+    } = body as {
+      message?: string;
+      fileName?: string;
+      fileContent?: string;
+      manualText?: string;
+      manualPdfBase64?: string;
+      manualFileId?: string;
+      subject?: "oop" | "dbms" | "wdu" | "general";
+      mode?: string;
+      history?: Array<{ role: string; content: string }>;
+      apiKey?: string;
+      model?: string;
+    };
+
+    // Fast-fail if no API key is available in request or server environment
+    const effectiveKey = (apiKey?.trim() || process.env.GEMINI_API_KEY?.trim()) ?? "";
+    if (!effectiveKey) {
+      return NextResponse.json(
+        {
+          error:
+            "Gemini API key is required. Click the ⚙️ Settings button in Lab Studio to enter your free Google Gemini API key.",
+          code: "MISSING_API_KEY",
+        },
+        { status: 401 }
+      );
+    }
+
+    // Guard against Vercel 4.5 MB request payload overflow
+    if (inputPdfBase64 && inputPdfBase64.length > 5.5 * 1024 * 1024) {
+      return NextResponse.json(
+        {
+          error: "Lab manual PDF payload is too large. Please upload a PDF under 3.5 MB.",
+          code: "PAYLOAD_TOO_LARGE",
+        },
+        { status: 413 }
+      );
+    }
+
+    // Resolve PDF if a file from the user's dashboard was selected as manual
+    let pdfBase64 = inputPdfBase64;
+    let manualFileName = "";
+
+    if (!pdfBase64 && manualFileId) {
+      try {
+        const fileRes = await db.execute({
+          sql: "SELECT public_id, name, bytes, mime FROM files WHERE id = ? AND user_id = ?",
+          args: [manualFileId, user.id],
+        });
+        if (fileRes.rows.length > 0) {
+          const row = fileRes.rows[0] as unknown as {
+            public_id: string;
+            name: string;
+            bytes: number;
+            mime: string | null;
+          };
+          if (row.bytes > 4 * 1024 * 1024) {
+            return NextResponse.json(
+              {
+                error: `Selected manual "${row.name}" exceeds the 4 MB limit for AI analysis.`,
+                code: "PAYLOAD_TOO_LARGE",
+              },
+              { status: 413 }
+            );
+          }
+          manualFileName = row.name;
+          const signedUrl = await resolveSignedDownloadUrl(row.public_id);
+          const dlRes = await fetch(signedUrl);
+          if (dlRes.ok) {
+            const buf = await dlRes.arrayBuffer();
+            pdfBase64 = Buffer.from(buf).toString("base64");
+          }
+        }
+      } catch {
+        // Fall back to text if retrieval failed
+      }
+    }
 
     const subject = requestedSubject || detectLabSubject(fileName, fileContent);
 
@@ -45,7 +133,13 @@ You format lab assignment solutions cleanly according to standard university lab
 
 Student's Subject: ${subjectTitle}
 Current File Name: "${fileName}"
-${manualText ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""` : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."}
+${
+  pdfBase64
+    ? `The student has attached their official University Lab Manual as a PDF (${manualFileName || "Manual.pdf"}). Examine the PDF pages, locate the experiment/question that corresponds to the student's code in "${fileName}", and extract the exact question number, exact question statement from the manual, constraints, and test requirements.`
+    : manualText
+    ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""`
+    : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."
+}
 `;
 
     // 1. Structured Lab Format Request
@@ -116,6 +210,7 @@ Output ONLY the raw JSON object. Do not wrap in markdown or add conversational p
       const rawResponse = await callGeminiApi({
         prompt,
         systemInstruction: baseSystemPrompt,
+        pdfBase64,
         apiKey,
         model,
         temperature: 0.1,
@@ -165,6 +260,7 @@ Provide actual realistic inputs suitable for stdin (with newlines between values
       const rawResponse = await callGeminiApi({
         prompt,
         systemInstruction: baseSystemPrompt,
+        pdfBase64,
         apiKey,
         model,
         temperature: 0.1,
@@ -195,6 +291,7 @@ Return a JSON array of objects with "question" and "answer" properties. Return O
       const rawResponse = await callGeminiApi({
         prompt,
         systemInstruction: baseSystemPrompt,
+        pdfBase64,
         apiKey,
         model,
         temperature: 0.2,
@@ -226,6 +323,7 @@ Provide a clear, educational, and direct response formatted in GitHub Markdown.`
     const chatResponse = await callGeminiApi({
       prompt: chatPrompt,
       systemInstruction: baseSystemPrompt,
+      pdfBase64,
       apiKey,
       model,
       temperature: 0.3,
@@ -237,9 +335,19 @@ Provide a clear, educational, and direct response formatted in GitHub Markdown.`
       subject,
     });
   } catch (err) {
+    if (err instanceof GeminiApiError) {
+      return NextResponse.json(
+        {
+          error: err.message,
+          code: err.code,
+        },
+        { status: err.status }
+      );
+    }
     return NextResponse.json(
       {
         error: err instanceof Error ? err.message : "Failed to process AI assistant request.",
+        code: "INTERNAL_ERROR",
       },
       { status: 500 }
     );

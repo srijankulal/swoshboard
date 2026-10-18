@@ -3,6 +3,8 @@ import { getSessionUser } from "@/lib/auth";
 import { simulateOracleSqlExecution } from "@/lib/sqlplus-emulator";
 import { callGeminiApi } from "@/lib/gemini";
 
+export const maxDuration = 60;
+
 interface TestCase {
   id: number;
   title?: string;

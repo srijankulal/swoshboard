@@ -165,19 +165,7 @@ export default function DashboardClient({ email }: { email: string }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("date-desc");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const saved = localStorage.getItem("swosh_theme");
-        if (saved === "light" || saved === "dark" || saved === "system") {
-          return saved;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    return "system";
-  });
+  const [theme, setTheme] = useState<ThemeMode>("system");
 
   const [mailSelected, setMailSelected] = useState<Set<string>>(new Set());
   const [mailOpen, setMailOpen] = useState(false);
@@ -185,17 +173,7 @@ export default function DashboardClient({ email }: { email: string }) {
   const [mailSubject, setMailSubject] = useState("");
   const [mailBody, setMailBody] = useState("");
   const [sendingMail, setSendingMail] = useState(false);
-  const [recentRecipients, setRecentRecipients] = useState<string[]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const raw = localStorage.getItem("swosh_recent_recipients");
-        if (raw) return JSON.parse(raw) as string[];
-      } catch {
-        // ignore
-      }
-    }
-    return [];
-  });
+  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
 
   const [modal, setModal] = useState<
     null | "newFolder" | "renameFolder" | "moveFiles" | "deleteFolder" | "bulkDelete"
@@ -243,6 +221,27 @@ export default function DashboardClient({ email }: { email: string }) {
   const dismissToast = (id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const savedTheme = localStorage.getItem("swosh_theme");
+        if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "system") {
+          setTheme(savedTheme);
+        }
+        const rawRecipients = localStorage.getItem("swosh_recent_recipients");
+        if (rawRecipients) {
+          const parsed = JSON.parse(rawRecipients);
+          if (Array.isArray(parsed)) {
+            setRecentRecipients(parsed);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (theme === "system") {
@@ -1247,11 +1246,12 @@ export default function DashboardClient({ email }: { email: string }) {
             onClick={cycleTheme}
             aria-label={`Theme: ${theme}. Click to switch theme`}
             title={`Theme: ${theme} (click to switch)`}
+            suppressHydrationWarning
           >
-            <span aria-hidden="true">
+            <span aria-hidden="true" suppressHydrationWarning>
               {theme === "light" ? "☀️" : theme === "dark" ? "🌙" : "🖥️"}
             </span>
-            <span className="theme-label">
+            <span className="theme-label" suppressHydrationWarning>
               {theme === "light" ? "Light" : theme === "dark" ? "Dark" : "Auto"}
             </span>
           </button>
@@ -1266,7 +1266,7 @@ export default function DashboardClient({ email }: { email: string }) {
             aria-expanded={mailOpen}
             title="Quick Mail (Alt+M)"
           >
-            <span aria-hidden="true">✉️</span> Quick Mail
+            <span aria-hidden="true">✉️</span> <span className="header-btn-label">Quick Mail</span>
             {mailSelected.size > 0 && (
               <span className="header-badge">{mailSelected.size}</span>
             )}
@@ -1280,7 +1280,7 @@ export default function DashboardClient({ email }: { email: string }) {
             aria-controls="clipboard-drawer"
             title="Open Clipboard (Alt+C)"
           >
-            <span aria-hidden="true">📋</span> Clipboard
+            <span aria-hidden="true">📋</span> <span className="header-btn-label">Clipboard</span>
             {clips.length > 0 && (
               <span className="header-badge" aria-label={`${clips.length} saved clips`}>
                 {clips.length}
@@ -1299,14 +1299,14 @@ export default function DashboardClient({ email }: { email: string }) {
             title="Lab Studio Compiler & AI Assistant (Alt+L)"
             aria-label="Open Lab Studio & AI Assistant"
           >
-            <span aria-hidden="true">🧪</span> Lab Studio
+            <span aria-hidden="true">🧪</span> <span className="header-btn-label">Lab Studio</span>
           </button>
 
           <span className="user-chip" title={email} aria-label={`Signed in as ${email}`}>
             {email}
           </span>
-          <button type="button" className="btn-secondary" onClick={handleLogout}>
-            Sign Out
+          <button type="button" className="btn-secondary logout-btn" onClick={handleLogout} title="Sign Out">
+            <span aria-hidden="true">🚪</span> <span className="header-btn-label">Sign Out</span>
           </button>
         </div>
       </header>
@@ -1781,153 +1781,159 @@ export default function DashboardClient({ email }: { email: string }) {
         </section>
 
         {mailOpen && (
-          <aside className="mail-panel glass-panel" aria-labelledby="quick-mail-heading">
-            <div className="panel-head">
-              <div>
-                <h2 id="quick-mail-heading" className="panel-title">Quick Mail</h2>
-                <span className="usage-label">Dispatched securely via Swoshmail</span>
-              </div>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Close Quick Mail panel"
-                onClick={() => setMailOpen(false)}
-              >
-                ✕
-              </button>
-            </div>
-
-            {selectedFiles.length > 0 ? (
-              <div className="mail-attachment-list" aria-label="Selected attachments">
-                <div className="mail-attachment-head">
-                  <span>{selectedFiles.length} Attachment(s)</span>
-                  <span>{formatBytes(selectedTotalBytes)}</span>
+          <div className="mail-drawer-overlay" onClick={() => setMailOpen(false)}>
+            <aside
+              className="mail-panel glass-panel"
+              aria-labelledby="quick-mail-heading"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="panel-head">
+                <div>
+                  <h2 id="quick-mail-heading" className="panel-title">Quick Mail</h2>
+                  <span className="usage-label">Dispatched securely via Swoshmail</span>
                 </div>
-                {selectedFiles.map((f) => (
-                  <div className="mail-attachment" key={f.id}>
-                    <span className="mail-attachment-name" title={f.name}>📎 {f.name}</span>
-                    <button
-                      type="button"
-                      className="attachment-remove-btn"
-                      onClick={() => toggleMailSelect(f.id)}
-                      aria-label={`Remove ${f.name} from email`}
-                      title="Remove attachment"
-                    >
-                      ✕
-                    </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Close Quick Mail panel"
+                  onClick={() => setMailOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {selectedFiles.length > 0 ? (
+                <div className="mail-attachment-list" aria-label="Selected attachments">
+                  <div className="mail-attachment-head">
+                    <span>{selectedFiles.length} Attachment(s)</span>
+                    <span>{formatBytes(selectedTotalBytes)}</span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="mail-empty-attachments">
-                No file attachments selected — you can send a text note directly or check files on the left to attach them.
-              </div>
-            )}
-
-            <div className="form-group">
-              <div className="form-label-row">
-                <label htmlFor="mail-to" className="form-label" style={{ marginBottom: 0 }}>
-                  To
-                </label>
-                {mailTo.toLowerCase() !== email.toLowerCase() && (
-                  <button
-                    type="button"
-                    className="link-btn"
-                    style={{ fontSize: "12px" }}
-                    onClick={() => setMailTo(email)}
-                  >
-                    + Send to myself
-                  </button>
-                )}
-              </div>
-              <div className="input-wrapper">
-                <input
-                  id="mail-to"
-                  type="text"
-                  inputMode="email"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="form-input"
-                  placeholder="username or recipient@example.com"
-                  value={mailTo}
-                  onChange={(e) => setMailTo(e.target.value)}
-                  onBlur={() => setMailTo((prev) => normalizeEmail(prev))}
-                  required
-                />
-                {mailTo.trim().length > 0 && !mailTo.includes("@") && (
-                  <span className="email-domain-hint" aria-hidden="true">@gmail.com</span>
-                )}
-              </div>
-
-              {recentRecipients.length > 0 && (
-                <div className="recipient-pills" aria-label="Recent recipients">
-                  {recentRecipients.map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      className={`recipient-pill ${mailTo === r ? "active" : ""}`}
-                      onClick={() => setMailTo(r)}
-                    >
-                      {r}
-                    </button>
+                  {selectedFiles.map((f) => (
+                    <div className="mail-attachment" key={f.id}>
+                      <span className="mail-attachment-name" title={f.name}>📎 {f.name}</span>
+                      <button
+                        type="button"
+                        className="attachment-remove-btn"
+                        onClick={() => toggleMailSelect(f.id)}
+                        aria-label={`Remove ${f.name} from email`}
+                        title="Remove attachment"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   ))}
                 </div>
+              ) : (
+                <div className="mail-empty-attachments">
+                  No file attachments selected — you can send a text note directly or check files on the left to attach them.
+                </div>
               )}
-            </div>
 
-            <div className="form-group">
-              <label htmlFor="mail-subject" className="form-label">Subject</label>
-              <input
-                id="mail-subject"
-                type="text"
-                className="form-input"
-                placeholder={
-                  selectedFiles.length > 0
-                    ? `Swoshboard: ${selectedFiles[0].name}${selectedFiles.length > 1 ? ` (+${selectedFiles.length - 1} more)` : ""}`
-                    : "Note from Swoshboard"
-                }
-                value={mailSubject}
-                onChange={(e) => setMailSubject(e.target.value)}
-              />
-            </div>
+              <div className="form-group">
+                <div className="form-label-row">
+                  <label htmlFor="mail-to" className="form-label" style={{ marginBottom: 0 }}>
+                    To
+                  </label>
+                  {mailTo.toLowerCase() !== email.toLowerCase() && (
+                    <button
+                      type="button"
+                      className="link-btn"
+                      style={{ fontSize: "12px" }}
+                      onClick={() => setMailTo(email)}
+                    >
+                      + Send to myself
+                    </button>
+                  )}
+                </div>
+                <div className="input-wrapper">
+                  <input
+                    id="mail-to"
+                    type="text"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="form-input"
+                    placeholder="username or recipient@example.com"
+                    value={mailTo}
+                    onChange={(e) => setMailTo(e.target.value)}
+                    onBlur={() => setMailTo((prev) => normalizeEmail(prev))}
+                    required
+                  />
+                  {mailTo.trim().length > 0 && !mailTo.includes("@") && (
+                    <span className="email-domain-hint" aria-hidden="true">@gmail.com</span>
+                  )}
+                </div>
 
-            <div className="form-group">
-              <div className="form-label-row">
-                <label htmlFor="mail-body" className="form-label" style={{ marginBottom: 0 }}>
-                  Notes / Body
-                </label>
-                {scratchpad.trim() && (
-                  <button
-                    type="button"
-                    className="link-btn"
-                    style={{ fontSize: "12px" }}
-                    onClick={handleInsertScratchpadToMail}
-                  >
-                    + Paste Scratchpad
-                  </button>
+                {recentRecipients.length > 0 && (
+                  <div className="recipient-pills" aria-label="Recent recipients">
+                    {recentRecipients.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        className={`recipient-pill ${mailTo === r ? "active" : ""}`}
+                        onClick={() => setMailTo(r)}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
-              <textarea
-                id="mail-body"
-                className="form-input"
-                rows={4}
-                placeholder="Write a message or paste notes..."
-                value={mailBody}
-                onChange={(e) => setMailBody(e.target.value)}
-              ></textarea>
-            </div>
 
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={sendingMail || (!mailBody.trim() && selectedFiles.length === 0)}
-              aria-busy={sendingMail}
-              onClick={handleSendMail}
-            >
-              {sendingMail ? <div className="spinner" aria-hidden="true"></div> : "Send via Swoshmail"}
-            </button>
-          </aside>
+              <div className="form-group">
+                <label htmlFor="mail-subject" className="form-label">Subject</label>
+                <input
+                  id="mail-subject"
+                  type="text"
+                  className="form-input"
+                  placeholder={
+                    selectedFiles.length > 0
+                      ? `Swoshboard: ${selectedFiles[0].name}${selectedFiles.length > 1 ? ` (+${selectedFiles.length - 1} more)` : ""}`
+                      : "Note from Swoshboard"
+                  }
+                  value={mailSubject}
+                  onChange={(e) => setMailSubject(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <div className="form-label-row">
+                  <label htmlFor="mail-body" className="form-label" style={{ marginBottom: 0 }}>
+                    Notes / Body
+                  </label>
+                  {scratchpad.trim() && (
+                    <button
+                      type="button"
+                      className="link-btn"
+                      style={{ fontSize: "12px" }}
+                      onClick={handleInsertScratchpadToMail}
+                    >
+                      + Paste Scratchpad
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  id="mail-body"
+                  className="form-input"
+                  rows={4}
+                  placeholder="Write a message or paste notes..."
+                  value={mailBody}
+                  onChange={(e) => setMailBody(e.target.value)}
+                ></textarea>
+              </div>
+
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={sendingMail || (!mailBody.trim() && selectedFiles.length === 0)}
+                aria-busy={sendingMail}
+                onClick={handleSendMail}
+              >
+                {sendingMail ? <div className="spinner" aria-hidden="true"></div> : "Send via Swoshmail"}
+              </button>
+            </aside>
+          </div>
         )}
       </main>
 
@@ -1948,8 +1954,9 @@ export default function DashboardClient({ email }: { email: string }) {
                 if (!mailTo) setMailTo(email);
                 setMailOpen(true);
               }}
+              title="Quick Mail selected files"
             >
-              <span aria-hidden="true">✉️</span> Mail
+              <span aria-hidden="true">✉️</span> <span className="floating-btn-label">Mail</span>
             </button>
             <button
               type="button"
@@ -1962,14 +1969,15 @@ export default function DashboardClient({ email }: { email: string }) {
               }}
               title="Open selected file in Lab Studio (Alt+L)"
             >
-              <span aria-hidden="true">🧪</span> Lab Studio
+              <span aria-hidden="true">🧪</span> <span className="floating-btn-label">Lab Studio</span>
             </button>
             <button
               type="button"
               className="btn-secondary"
               onClick={handleBulkDownload}
+              title="Download selected files"
             >
-              <span aria-hidden="true">⬇️</span> Download
+              <span aria-hidden="true">⬇️</span> <span className="floating-btn-label">Download</span>
             </button>
             <button
               type="button"
@@ -1978,15 +1986,17 @@ export default function DashboardClient({ email }: { email: string }) {
                 setMoveTarget(null);
                 setModal("moveFiles");
               }}
+              title="Move selected files"
             >
-              <span aria-hidden="true">📁</span> Move
+              <span aria-hidden="true">📁</span> <span className="floating-btn-label">Move</span>
             </button>
             <button
               type="button"
               className="btn-secondary danger-text"
               onClick={() => setModal("bulkDelete")}
+              title="Delete selected files"
             >
-              <span aria-hidden="true">🗑️</span> Delete
+              <span aria-hidden="true">🗑️</span> <span className="floating-btn-label">Delete</span>
             </button>
             <button
               type="button"

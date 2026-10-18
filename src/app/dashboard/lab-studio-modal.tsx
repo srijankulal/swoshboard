@@ -52,6 +52,14 @@ interface ChatMessage {
   structured?: StructuredLabRecord;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
 export function LabStudioModal({
   isOpen,
   onClose,
@@ -67,35 +75,36 @@ export function LabStudioModal({
   const [subject, setSubject] = useState<LabSubject>("oop");
   const [loadingFile, setLoadingFile] = useState<boolean>(false);
 
-  // Settings with lazy initializers from localStorage
+  // Settings state (initialized statically to avoid hydration mismatches)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
-  const [apiKey, setApiKey] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    try {
-      return localStorage.getItem("swosh_gemini_key") || "";
-    } catch {
-      return "";
-    }
-  });
-  const [selectedModel, setSelectedModel] = useState<string>(() => {
-    if (typeof window === "undefined") return "gemini-2.5-flash";
-    try {
-      return localStorage.getItem("swosh_gemini_model") || "gemini-2.5-flash";
-    } catch {
-      return "gemini-2.5-flash";
-    }
-  });
+  const [apiKey, setApiKey] = useState<string>("");
+  const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash");
 
-  // Lab Manual drawer with lazy initializer
+  // Lab Manual (PDF or Text) state
   const [manualOpen, setManualOpen] = useState<boolean>(false);
-  const [manualText, setManualText] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    try {
-      return localStorage.getItem("swosh_lab_manual") || "";
-    } catch {
-      return "";
-    }
-  });
+  const [manualFileId, setManualFileId] = useState<string>("");
+  const [manualPdfBase64, setManualPdfBase64] = useState<string>("");
+  const [manualUploadName, setManualUploadName] = useState<string>("");
+  const manualUploadInputRef = useRef<HTMLInputElement>(null);
+  const [manualText, setManualText] = useState<string>("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const savedKey = localStorage.getItem("swosh_gemini_key");
+        if (savedKey) setApiKey(savedKey);
+        const savedModel = localStorage.getItem("swosh_gemini_model");
+        if (savedModel) setSelectedModel(savedModel);
+        const savedFileId = localStorage.getItem("swosh_manual_file_id");
+        if (savedFileId) setManualFileId(savedFileId);
+        const savedManual = localStorage.getItem("swosh_lab_manual");
+        if (savedManual) setManualText(savedManual);
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Compiler state
   const [stdin, setStdin] = useState<string>("");
@@ -135,6 +144,70 @@ export function LabStudioModal({
     } catch {
       /* ignore */
     }
+  };
+
+  const handleDirectManualUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
+      onToast("danger", "Invalid File", "Please select a PDF document for your lab manual.");
+      return;
+    }
+
+    if (file.size > 3.5 * 1024 * 1024) {
+      onToast("danger", "File Too Large", "Direct PDF upload must be under 3.5 MB (Vercel payload limit). For larger manuals, upload to your board first.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.replace(/^data:application\/pdf;base64,/, "");
+      setManualPdfBase64(base64);
+      setManualUploadName(file.name);
+      setManualFileId("");
+      try {
+        localStorage.removeItem("swosh_manual_file_id");
+      } catch {
+        /* ignore */
+      }
+      onToast("success", "PDF Manual Attached", `"${file.name}" loaded for AI question extraction.`);
+    };
+    reader.onerror = () => {
+      onToast("danger", "Read Error", "Failed to read the selected PDF file.");
+    };
+    reader.readAsDataURL(file);
+
+    if (manualUploadInputRef.current) manualUploadInputRef.current.value = "";
+  };
+
+  const handleSelectManualFromBoard = (fileId: string) => {
+    setManualFileId(fileId);
+    setManualPdfBase64("");
+    setManualUploadName("");
+    try {
+      if (fileId) {
+        localStorage.setItem("swosh_manual_file_id", fileId);
+        const target = files.find((f) => f.id === fileId);
+        onToast("success", "PDF Manual Linked", `"${target?.name || "PDF"}" linked as your lab manual.`);
+      } else {
+        localStorage.removeItem("swosh_manual_file_id");
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleClearManualPdf = () => {
+    setManualFileId("");
+    setManualPdfBase64("");
+    setManualUploadName("");
+    try {
+      localStorage.removeItem("swosh_manual_file_id");
+    } catch {
+      /* ignore */
+    }
+    onToast("success", "Manual Detached", "PDF manual detached.");
   };
 
   // Language auto-detection
@@ -359,12 +432,20 @@ export function LabStudioModal({
             fileName,
             fileContent: code,
             manualText,
+            manualFileId: manualFileId || undefined,
+            manualPdfBase64: manualPdfBase64 || undefined,
             subject,
             apiKey,
             model: selectedModel,
           }),
         });
         const genData = await genRes.json();
+        if (genRes.status === 401 || genData.code === "MISSING_API_KEY" || genData.code === "INVALID_API_KEY") {
+          setSettingsOpen(true);
+          onToast("danger", "API Key Required", genData.error || "Please enter your Gemini API key in Settings.");
+          setTerminalOutput(`[Authentication Error]:\n${genData.error || "Gemini API key is required."}\n\nPlease click Settings (⚙️) to enter your Gemini API key.`);
+          return;
+        }
         if (genData.testCases && genData.testCases.length > 0) {
           currentTestCases = genData.testCases;
           setTestCases(currentTestCases);
@@ -440,6 +521,8 @@ export function LabStudioModal({
           fileName,
           fileContent: code,
           manualText,
+          manualFileId: manualFileId || undefined,
+          manualPdfBase64: manualPdfBase64 || undefined,
           subject,
           apiKey,
           model: selectedModel,
@@ -447,6 +530,20 @@ export function LabStudioModal({
       });
 
       const data = await res.json();
+      if (res.status === 401 || data.code === "MISSING_API_KEY" || data.code === "INVALID_API_KEY") {
+        setSettingsOpen(true);
+        onToast("danger", "API Key Required", data.error || "Please enter your Gemini API key in Settings.");
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: String(Date.now()),
+            role: "assistant",
+            content: `🔑 **Gemini API Key Required**\n\nTo generate structured lab records and viva questions, please enter your free Google Gemini API key in Settings (⚙️).\n\nYou can obtain a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey).`,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "AI Assistant could not format record.");
 
       if (data.structured) {
@@ -498,6 +595,8 @@ export function LabStudioModal({
           fileName,
           fileContent: code,
           manualText,
+          manualFileId: manualFileId || undefined,
+          manualPdfBase64: manualPdfBase64 || undefined,
           subject,
           history: chatMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
           apiKey,
@@ -506,6 +605,20 @@ export function LabStudioModal({
       });
 
       const data = await res.json();
+      if (res.status === 401 || data.code === "MISSING_API_KEY" || data.code === "INVALID_API_KEY") {
+        setSettingsOpen(true);
+        onToast("danger", "API Key Required", data.error || "Please enter your Gemini API key in Settings.");
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: String(Date.now() + 1),
+            role: "assistant",
+            content: `🔑 **Gemini API Key Required**\n\nTo chat with the Lab Assistant, please enter your free Google Gemini API key in Settings (⚙️).\n\nYou can obtain a free key at [Google AI Studio](https://aistudio.google.com/app/apikey).`,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Failed to get AI response.");
 
       const assistantMsg: ChatMessage = {
@@ -591,6 +704,14 @@ export function LabStudioModal({
 
   if (!isOpen) return null;
 
+  const pdfFiles = files.filter(
+    (f) => f.mime === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
+  );
+  const selectedManualFile = files.find((f) => f.id === manualFileId);
+  const activeManualName =
+    manualUploadName || (selectedManualFile ? selectedManualFile.name : "");
+  const hasActiveManual = Boolean(activeManualName || manualText.trim());
+
   return (
     <div className="lab-modal-overlay" role="dialog" aria-modal="true" aria-label="Lab Studio & AI Assistant">
       <div className="lab-modal-window">
@@ -649,7 +770,7 @@ export function LabStudioModal({
               className={`lab-nav-tab ${activeTab === "compiler" ? "active" : ""}`}
               onClick={() => setActiveTab("compiler")}
             >
-              <span>⚡</span> Compiler & Terminal
+              <span>⚡</span> <span className="lab-tab-label">Compiler</span><span className="lab-tab-label-full"> &amp; Terminal</span>
             </button>
             <button
               role="tab"
@@ -657,7 +778,7 @@ export function LabStudioModal({
               className={`lab-nav-tab ${activeTab === "assistant" ? "active" : ""}`}
               onClick={() => setActiveTab("assistant")}
             >
-              <span>🤖</span> AI Lab Assistant
+              <span>🤖</span> <span className="lab-tab-label">AI Assistant</span>
               {structuredRecord && <span className="lab-badge-pulse" title="Structured Record Ready" />}
             </button>
           </div>
@@ -665,16 +786,16 @@ export function LabStudioModal({
           {/* Controls */}
           <div className="lab-header-right">
             <button
-              className="lab-icon-btn"
+              className={`lab-icon-btn lab-manual-btn ${hasActiveManual ? "lab-btn-active" : ""}`}
               onClick={() => setManualOpen((prev) => !prev)}
-              title="Lab Manual & Question Bank"
+              title="Lab Manual & Question Bank (PDF or Text)"
             >
               <span>📋</span>
-              <span className="lab-btn-label">Manual {manualText ? "✓" : ""}</span>
+              <span className="lab-btn-label">Manual {hasActiveManual ? "✓" : ""}</span>
             </button>
 
             <button
-              className="lab-icon-btn"
+              className="lab-icon-btn lab-settings-btn"
               onClick={() => setSettingsOpen(true)}
               title="API Key & Model Settings"
             >
@@ -695,21 +816,106 @@ export function LabStudioModal({
         {manualOpen && (
           <div className="lab-drawer">
             <div className="lab-drawer-header">
-              <h4>📋 University Lab Manual / Question Bank</h4>
+              <div className="lab-drawer-title-row">
+                <span className="lab-drawer-badge">LAB MANUAL</span>
+                <h4>University Lab Manual (PDF)</h4>
+              </div>
               <button className="lab-drawer-close" onClick={() => setManualOpen(false)}>✕</button>
             </div>
             <p className="lab-drawer-desc">
-              Paste your lab questions, syllabus, or problem statements below. The AI Assistant will automatically map question numbers and requirements to your code.
+              Select an uploaded PDF from your board or upload a PDF lab manual directly. The AI Assistant analyzes the PDF pages with multimodal vision to match your code to the exact question.
             </p>
-            <textarea
-              className="lab-drawer-textarea"
-              placeholder="e.g. Question 1: Write a C++ program to implement a matrix class with operator overloading...&#10;Question 2: Write SQL queries for employee department joins..."
-              value={manualText}
-              onChange={(e) => saveManual(e.target.value)}
-              rows={4}
-            />
+
+            {/* Active Attached PDF Badge */}
+            {activeManualName ? (
+              <div className="lab-manual-active-card">
+                <div className="lab-manual-active-info">
+                  <span className="lab-manual-pdf-icon" aria-hidden="true">📕</span>
+                  <div>
+                    <div className="lab-manual-name">{activeManualName}</div>
+                    <div className="lab-manual-source">
+                      {manualUploadName ? "Uploaded from your computer" : "Linked from Swoshboard files"}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-text-sm danger-text"
+                  onClick={handleClearManualPdf}
+                  title="Detach PDF manual"
+                >
+                  Detach PDF ✕
+                </button>
+              </div>
+            ) : (
+              <div className="lab-manual-pickers">
+                {/* Source 1: Select from Uploaded Files */}
+                <div className="lab-manual-field">
+                  <label htmlFor="manual-board-select" className="lab-field-label">
+                    1. Select PDF from your uploaded board files:
+                  </label>
+                  <select
+                    id="manual-board-select"
+                    className="lab-select lab-manual-select"
+                    value={manualFileId}
+                    onChange={(e) => handleSelectManualFromBoard(e.target.value)}
+                  >
+                    <option value="">-- Choose uploaded PDF manual --</option>
+                    {pdfFiles.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        📄 {f.name} ({formatBytes(f.size)})
+                      </option>
+                    ))}
+                  </select>
+                  {pdfFiles.length === 0 && (
+                    <span className="lab-field-hint">No PDF files uploaded on your board yet.</span>
+                  )}
+                </div>
+
+                <div className="lab-manual-or-divider">OR</div>
+
+                {/* Source 2: Direct Upload from Computer */}
+                <div className="lab-manual-field">
+                  <span className="lab-field-label">2. Upload PDF manual from device:</span>
+                  <input
+                    ref={manualUploadInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    style={{ display: "none" }}
+                    onChange={handleDirectManualUpload}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm lab-upload-manual-btn"
+                    onClick={() => manualUploadInputRef.current?.click()}
+                  >
+                    <span>📤</span> Choose PDF Document
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Optional Specific Question Text Notes */}
+            <div className="lab-manual-text-wrap">
+              <label htmlFor="manual-text-notes" className="lab-field-label">
+                Or enter specific question number / notes:
+              </label>
+              <textarea
+                id="manual-text-notes"
+                className="lab-drawer-textarea"
+                placeholder="e.g. Experiment 3 / Question 2: Matrix multiplication (Optional if PDF is attached)"
+                value={manualText}
+                onChange={(e) => saveManual(e.target.value)}
+                rows={2}
+              />
+            </div>
+
             <div className="lab-drawer-footer">
-              <span className="lab-drawer-hint">Saved automatically to your browser</span>
+              <span className="lab-drawer-hint">
+                {activeManualName
+                  ? `✓ Active PDF manual: "${activeManualName}" will be processed directly by Gemini.`
+                  : "PDF manuals are processed directly by Gemini multimodal AI."}
+              </span>
               <button className="btn btn-secondary btn-sm" onClick={() => setManualOpen(false)}>Done</button>
             </div>
           </div>
