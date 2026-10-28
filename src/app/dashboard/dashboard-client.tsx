@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { LabStudioModal } from "./lab-studio-modal";
+import { buildZip, downloadBlob, type ZipFileEntry } from "@/lib/zip";
 
 interface StoredFile {
   id: string;
@@ -29,7 +30,7 @@ interface Usage {
 
 interface Toast {
   id: number;
-  type: "success" | "danger";
+  type: "success" | "danger" | "info";
   title: string;
   message: string;
 }
@@ -213,7 +214,7 @@ export default function DashboardClient({ email }: { email: string }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const folderCache = useRef<Map<string, string | null>>(new Map());
 
-  const addToast = useCallback((type: "success" | "danger", title: string, message: string) => {
+  const addToast = useCallback((type: "success" | "danger" | "info", title: string, message: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, type, title, message }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
@@ -860,22 +861,122 @@ export default function DashboardClient({ email }: { email: string }) {
     }
   };
 
+  const getAllDescendantFolderIds = useCallback((rootId: string): Set<string> => {
+    const result = new Set<string>([rootId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const f of folders) {
+        if (f.parentId && result.has(f.parentId) && !result.has(f.id)) {
+          result.add(f.id);
+          added = true;
+        }
+      }
+    }
+    return result;
+  }, [folders]);
+
+  const handleDownloadFolder = async (folder: Folder) => {
+    const descendantIds = getAllDescendantFolderIds(folder.id);
+    const folderFiles = files.filter((f) => f.folderId && descendantIds.has(f.folderId));
+
+    if (folderFiles.length === 0) {
+      addToast("danger", "Folder is Empty", `Folder "${folder.name}" contains no files to download.`);
+      return;
+    }
+
+    addToast(
+      "info",
+      "Packaging Folder ZIP",
+      `Downloading and compressing ${folderFiles.length} file(s) from "${folder.name}"...`
+    );
+
+    const folderMap = new Map<string, Folder>();
+    for (const f of folders) folderMap.set(f.id, f);
+
+    const getRelativePath = (fileFolderId: string | null): string => {
+      const parts: string[] = [];
+      let curId = fileFolderId;
+      while (curId && curId !== folder.id) {
+        const curFolder = folderMap.get(curId);
+        if (!curFolder) break;
+        parts.unshift(curFolder.name);
+        curId = curFolder.parentId;
+      }
+      return parts.length > 0 ? parts.join("/") + "/" : "";
+    };
+
+    try {
+      const entries: ZipFileEntry[] = [];
+      for (const file of folderFiles) {
+        const subPath = getRelativePath(file.folderId);
+        const res = await fetch(`/api/files/${file.id}/download`);
+        if (!res.ok) {
+          throw new Error(`Failed to download "${file.name}"`);
+        }
+        const arrayBuf = await res.arrayBuffer();
+        entries.push({
+          name: `${folder.name}/${subPath}${file.name}`,
+          data: arrayBuf,
+          date: new Date(file.createdAt),
+        });
+      }
+
+      const zipBlob = buildZip(entries);
+      downloadBlob(zipBlob, `${folder.name}.zip`);
+      addToast("success", "Download Complete", `Downloaded "${folder.name}.zip" successfully.`);
+    } catch (err) {
+      addToast(
+        "danger",
+        "Folder Download Failed",
+        err instanceof Error ? err.message : "Could not create ZIP archive."
+      );
+    }
+  };
+
   const handleBulkDownload = async () => {
     const selectedFilesList = files.filter((f) => mailSelected.has(f.id));
     if (selectedFilesList.length === 0) return;
 
-    addToast("info", "Downloading Files", `Downloading ${selectedFilesList.length} file(s)...`);
-    for (let i = 0; i < selectedFilesList.length; i++) {
-      const file = selectedFilesList[i];
-      if (i > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
+    if (selectedFilesList.length === 1) {
+      handleDownload(selectedFilesList[0]);
+      return;
+    }
+
+    addToast(
+      "info",
+      "Packaging ZIP Archive",
+      `Compressing ${selectedFilesList.length} selected files into a ZIP...`
+    );
+
+    try {
+      const entries: ZipFileEntry[] = [];
+      for (const file of selectedFilesList) {
+        const res = await fetch(`/api/files/${file.id}/download`);
+        if (!res.ok) {
+          throw new Error(`Failed to download "${file.name}"`);
+        }
+        const arrayBuf = await res.arrayBuffer();
+        entries.push({
+          name: file.name,
+          data: arrayBuf,
+          date: new Date(file.createdAt),
+        });
       }
-      const a = document.createElement("a");
-      a.href = `/api/files/${file.id}/download`;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+
+      const zipBlob = buildZip(entries);
+      downloadBlob(zipBlob, `swoshboard-selected-files.zip`);
+      addToast(
+        "success",
+        "Download Complete",
+        `Downloaded ${selectedFilesList.length} files as swoshboard-selected-files.zip.`
+      );
+    } catch (err) {
+      addToast(
+        "danger",
+        "Bulk Download Failed",
+        err instanceof Error ? err.message : "Could not create ZIP archive."
+      );
     }
   };
 
@@ -1439,6 +1540,19 @@ export default function DashboardClient({ email }: { email: string }) {
                 </span>
               );
             })}
+            {currentFolderId !== null && (
+              <button
+                type="button"
+                className="btn-secondary btn-compact breadcrumb-download-btn"
+                title={`Download "${currentFolderName}" as ZIP`}
+                onClick={() => {
+                  const curr = folders.find((f) => f.id === currentFolderId);
+                  if (curr) handleDownloadFolder(curr);
+                }}
+              >
+                <span aria-hidden="true">⬇</span> Download Folder (.zip)
+              </button>
+            )}
           </nav>
 
           <div
@@ -1615,6 +1729,19 @@ export default function DashboardClient({ email }: { email: string }) {
                       </div>
                     </button>
                     <div className="file-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        aria-label={`Download folder ${folder.name} as ZIP`}
+                        title="Download folder as ZIP"
+                        onClick={() => handleDownloadFolder(folder)}
+                      >
+                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                          <polyline points="7 10 12 15 17 10"></polyline>
+                          <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                      </button>
                       <button
                         type="button"
                         className="icon-btn"
@@ -2446,7 +2573,7 @@ export default function DashboardClient({ email }: { email: string }) {
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast-${toast.type}`} role="status">
             <span className="toast-icon" aria-hidden="true">
-              {toast.type === "success" ? "✓" : "⚠"}
+              {toast.type === "success" ? "✓" : toast.type === "info" ? "ℹ" : "⚠"}
             </span>
             <div className="toast-content">
               <div className="toast-title">{toast.title}</div>

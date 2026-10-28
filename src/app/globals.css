@@ -1580,6 +1580,10 @@ kbd {
   border-left: 4px solid var(--danger);
 }
 
+.toast-info {
+  border-left: 4px solid var(--accent);
+}
+
 .toast-icon {
   font-size: 16px;
   font-weight: 800;
@@ -1592,6 +1596,10 @@ kbd {
 
 .toast-danger .toast-icon {
   color: var(--danger);
+}
+
+.toast-info .toast-icon {
+  color: var(--accent);
 }
 
 .toast-content {

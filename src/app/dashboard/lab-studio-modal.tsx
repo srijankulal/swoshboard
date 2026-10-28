@@ -16,7 +16,7 @@ export interface LabStudioModalProps {
   files: StoredFileSummary[];
   initialFile?: StoredFileSummary | null;
   initialMode?: "compiler" | "assistant";
-  onToast: (type: "success" | "danger", title: string, message: string) => void;
+  onToast: (type: "success" | "danger" | "info", title: string, message: string) => void;
 }
 
 export type LabSubject = "oop" | "dbms" | "wdu" | "general";
