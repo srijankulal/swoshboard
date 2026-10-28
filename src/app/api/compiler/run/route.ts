@@ -151,9 +151,11 @@ export async function POST(request: Request) {
     } = body;
 
     const lang = language.toLowerCase();
+    console.log(`[Compiler Route] Execution request for language="${lang}", codeLength=${code.length}, testCases=${testCases?.length || 0}`);
 
     // 1. DBMS / SQL*Plus execution
     if (lang === "sql" || lang === "dbms") {
+      console.log("[Compiler Route] Executing via Oracle SQL*Plus emulator...");
       const formatted = simulateOracleSqlExecution(code);
       return NextResponse.json({
         success: true,

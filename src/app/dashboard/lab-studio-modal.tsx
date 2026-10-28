@@ -119,7 +119,7 @@ export function LabStudioModal({
   // Settings state (initialized statically to avoid hydration mismatches)
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [apiKey, setApiKey] = useState<string>("");
-  const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash");
+  const [selectedModel, setSelectedModel] = useState<string>("gemini-3.8-flash");
 
   // Lab Manual (PDF or Text) state
   const [manualOpen, setManualOpen] = useState<boolean>(false);
@@ -135,7 +135,18 @@ export function LabStudioModal({
         const savedKey = localStorage.getItem("swosh_gemini_key");
         if (savedKey) setApiKey(savedKey);
         const savedModel = localStorage.getItem("swosh_gemini_model");
-        if (savedModel) setSelectedModel(savedModel);
+        if (savedModel) {
+          if (savedModel.includes("1.5") || savedModel.includes("2.0") || (savedModel.includes("2.5") && !savedModel.includes("tts"))) {
+            setSelectedModel("gemini-3.8-flash");
+            try {
+              localStorage.setItem("swosh_gemini_model", "gemini-3.8-flash");
+            } catch {
+              /* ignore */
+            }
+          } else {
+            setSelectedModel(savedModel);
+          }
+        }
         const savedFileId = localStorage.getItem("swosh_manual_file_id");
         if (savedFileId) setManualFileId(savedFileId);
         const savedManual = localStorage.getItem("swosh_lab_manual");
@@ -424,6 +435,12 @@ export function LabStudioModal({
 
     setIsRunning(true);
     setTerminalOutput("Compiling and executing...\n");
+    console.log("[Lab Studio Compiler] Running code...", {
+      subject,
+      codeLength: code.length,
+      stdinLength: stdin.length,
+      hasCustomApiKey: Boolean(apiKey),
+    });
 
     try {
       const res = await fetch("/api/compiler/run", {
@@ -437,6 +454,7 @@ export function LabStudioModal({
         }),
       });
       const data = await res.json();
+      console.log("[Lab Studio Compiler] Response data:", data);
       if (!res.ok) throw new Error(data.error || "Execution failed.");
 
       if (data.engine) setCompilerEngine(data.engine);
@@ -445,6 +463,7 @@ export function LabStudioModal({
         setTerminalOutput((prev) => `${prev}\n\n[Standard Error]:\n${data.stderr}`);
       }
     } catch (err) {
+      console.error("[Lab Studio Compiler] Run error:", err);
       setTerminalOutput(`[Execution Error]:\n${err instanceof Error ? err.message : "Run failed"}`);
     } finally {
       setIsRunning(false);
@@ -460,11 +479,20 @@ export function LabStudioModal({
 
     setRunningTestCases(true);
     setTerminalOutput("Generating and executing 3 test cases...\n");
+    console.log("[Lab Studio Compiler] Running 3 test cases...", {
+      fileName,
+      subject,
+      codeLength: code.length,
+      existingCount: testCases.length,
+      model: selectedModel,
+      hasCustomApiKey: Boolean(apiKey),
+    });
 
     try {
       // If we don't have test cases, generate them first
       let currentTestCases = testCases;
       if (currentTestCases.length === 0) {
+        console.log("[Lab Studio Compiler] No test cases cached, generating via AI assistant...");
         const genRes = await fetch("/api/assistant/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -481,6 +509,7 @@ export function LabStudioModal({
           }),
         });
         const genData = await genRes.json();
+        console.log("[Lab Studio Compiler] AI testcase generation response:", genData);
         if (genRes.status === 401 || genData.code === "MISSING_API_KEY" || genData.code === "INVALID_API_KEY") {
           setSettingsOpen(true);
           onToast("danger", "API Key Required", genData.error || "Please enter your Gemini API key in Settings.");
@@ -553,6 +582,17 @@ export function LabStudioModal({
     }
 
     setAssistantLoading(true);
+    console.log("[Lab Studio AI] Requesting structured record...", {
+      fileName,
+      subject,
+      model: selectedModel,
+      codeLength: code.length,
+      hasManualText: Boolean(manualText),
+      hasManualPdf: Boolean(manualPdfBase64),
+      manualFileId,
+      hasCustomApiKey: Boolean(apiKey),
+    });
+
     try {
       const res = await fetch("/api/assistant/chat", {
         method: "POST",
@@ -571,6 +611,7 @@ export function LabStudioModal({
       });
 
       const data = await res.json();
+      console.log("[Lab Studio AI] Structure response received:", { status: res.status, ok: res.ok, data });
       if (res.status === 401 || data.code === "MISSING_API_KEY" || data.code === "INVALID_API_KEY") {
         setSettingsOpen(true);
         onToast("danger", "API Key Required", data.error || "Please enter your Gemini API key in Settings.");
@@ -604,6 +645,7 @@ export function LabStudioModal({
         onToast("success", "Lab Record Ready", "Structured record generated successfully.");
       }
     } catch (err) {
+      console.error("[Lab Studio AI] Structure formatting failed:", err);
       onToast("danger", "AI Error", err instanceof Error ? err.message : "Failed to generate structure");
     } finally {
       setAssistantLoading(false);
@@ -625,6 +667,14 @@ export function LabStudioModal({
     setChatMessages((prev) => [...prev, userMsg]);
     if (!customPrompt) setChatInput("");
     setAssistantLoading(true);
+    console.log("[Lab Studio AI] Sending chat message...", {
+      message: text,
+      fileName,
+      subject,
+      model: selectedModel,
+      historyCount: chatMessages.length,
+      hasCustomApiKey: Boolean(apiKey),
+    });
 
     try {
       const res = await fetch("/api/assistant/chat", {
@@ -646,6 +696,7 @@ export function LabStudioModal({
       });
 
       const data = await res.json();
+      console.log("[Lab Studio AI] Chat response received:", { status: res.status, ok: res.ok, data });
       if (res.status === 401 || data.code === "MISSING_API_KEY" || data.code === "INVALID_API_KEY") {
         setSettingsOpen(true);
         onToast("danger", "API Key Required", data.error || "Please enter your Gemini API key in Settings.");
@@ -670,6 +721,7 @@ export function LabStudioModal({
       };
       setChatMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
+      console.error("[Lab Studio AI] Chat request failed:", err);
       onToast("danger", "AI Chat Error", err instanceof Error ? err.message : "Error contacting assistant");
     } finally {
       setAssistantLoading(false);
@@ -1029,9 +1081,11 @@ export function LabStudioModal({
                     value={selectedModel}
                     onChange={(e) => setSelectedModel(e.target.value)}
                   >
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fastest & Recommended)</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash (Recommended)</option>
+                    <option value="gemini-3.5-flash">Gemini 3.5 Flash (Ultra-Stable)</option>
+                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (Fast)</option>
+                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Lightweight)</option>
+                    <option value="gemini-4-argon">Gemini 4 Argon (Advanced Reasoning)</option>
                   </select>
                 </div>
               </div>

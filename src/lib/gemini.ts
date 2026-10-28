@@ -43,7 +43,39 @@ export class GeminiApiError extends Error {
   }
 }
 
-const DEFAULT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+const DEFAULT_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-4-argon",
+];
+
+export function normalizeGeminiModel(inputModel?: string): string {
+  if (!inputModel) return "gemini-3.8-flash";
+  const trimmed = inputModel.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Deprecated models according to Google Gemini API Skill rules:
+  // "Models like gemini-2.5-*, gemini-2.0-*, gemini-1.5-* are legacy and deprecated. Never use them.
+  // If a user asks for a deprecated model, use gemini-3.8-flash instead and note the substitution."
+  if (
+    lower.includes("1.5") ||
+    lower.includes("2.0") ||
+    (lower.includes("2.5") && !lower.includes("preview-tts"))
+  ) {
+    console.info(`[Gemini API] Upgrading deprecated model "${inputModel}" to "gemini-3.8-flash".`);
+    return "gemini-3.8-flash";
+  }
+
+  if (lower === "3.8-flash" || lower === "gemini-3.8-flash") return "gemini-3.8-flash";
+  if (lower === "3.5-flash" || lower === "gemini-3.5-flash") return "gemini-3.5-flash";
+  if (lower === "3.5-flash-lite" || lower === "gemini-3.5-flash-lite") return "gemini-3.5-flash-lite";
+  if (lower === "3.1-flash-lite" || lower === "gemini-3.1-flash-lite") return "gemini-3.1-flash-lite";
+  if (lower === "4-argon" || lower === "gemini-4-argon") return "gemini-4-argon";
+
+  return trimmed;
+}
 
 export async function callGeminiApi(options: {
   prompt: string;
@@ -55,6 +87,7 @@ export async function callGeminiApi(options: {
 }): Promise<string> {
   const key = options.apiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
   if (!key) {
+    console.error("[Gemini API] Error: No Gemini API key provided in options or environment variable GEMINI_API_KEY.");
     throw new GeminiApiError(
       "Gemini API key is required. Please add GEMINI_API_KEY to your environment or enter your key in Lab Studio settings (⚙️).",
       401,
@@ -62,14 +95,19 @@ export async function callGeminiApi(options: {
     );
   }
 
-  const modelsToTry = options.model
-    ? [options.model, ...DEFAULT_MODELS.filter((m) => m !== options.model)]
-    : DEFAULT_MODELS;
+  const requestedModel = normalizeGeminiModel(options.model);
+  const modelsToTry = [requestedModel, ...DEFAULT_MODELS.filter((m) => m !== requestedModel)];
+
+  console.log(`[Gemini API] Invoking Gemini API. Target model: "${requestedModel}", key prefix: "${key.slice(0, 7)}...", key length: ${key.length}`);
+  if (!key.startsWith("AIzaSy")) {
+    console.warn(`[Gemini API] Warning: The provided API key does not start with standard Google AI Studio prefix "AIzaSy". Key starts with: "${key.slice(0, 8)}...".`);
+  }
 
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
     try {
+      console.log(`[Gemini API] Attempting model "${model}"...`);
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
         key
       )}`;
@@ -116,16 +154,50 @@ export async function callGeminiApi(options: {
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         const rawMsg =
-          (errData as { error?: { message?: string } })?.error?.message ||
+          (errData as { error?: { message?: string; status?: string } })?.error?.message ||
           `HTTP ${res.status}`;
 
-        // If 404 (model not found), try the next model
-        if (res.status === 404) {
-          lastError = new GeminiApiError(`Model ${model} not available: ${rawMsg}`, 404, "MODEL_NOT_FOUND");
-          continue;
+        console.warn(`[Gemini API] Model "${model}" failed with HTTP ${res.status}:`, rawMsg);
+
+        // 1. Model not found or unsupported on this endpoint
+        const isNotFound =
+          res.status === 404 ||
+          (res.status === 400 &&
+            (rawMsg.toLowerCase().includes("not found") ||
+              rawMsg.toLowerCase().includes("not supported") ||
+              rawMsg.toLowerCase().includes("call listmodels")));
+
+        // 2. High demand, temporary server overload, rate limiting (503, 502, 504, 500, 429)
+        const isTransientOrOverloaded =
+          res.status === 503 ||
+          res.status === 502 ||
+          res.status === 504 ||
+          res.status === 500 ||
+          res.status === 429 ||
+          rawMsg.toLowerCase().includes("high demand") ||
+          rawMsg.toLowerCase().includes("spikes in demand") ||
+          rawMsg.toLowerCase().includes("temporarily") ||
+          rawMsg.toLowerCase().includes("resource has been exhausted");
+
+        if (isNotFound || isTransientOrOverloaded) {
+          const reason = isNotFound
+            ? "is not available on this API version"
+            : `is temporarily experiencing high demand/rate-limiting (HTTP ${res.status}: ${rawMsg})`;
+          console.warn(`[Gemini API] Model "${model}" ${reason}. Falling back to next model...`);
+          lastError = new GeminiApiError(
+            `Model ${model} ${reason}: ${rawMsg}`,
+            res.status,
+            isNotFound ? "MODEL_NOT_FOUND" : res.status === 429 ? "RATE_LIMITED" : "HIGH_DEMAND"
+          );
+          continue; // Seamlessly try next model in fallback sequence!
         }
 
-        if (res.status === 400 || res.status === 401 || res.status === 403) {
+        // 3. Authentication errors (401, 403, or invalid API key message in 400)
+        if (
+          res.status === 401 ||
+          res.status === 403 ||
+          (res.status === 400 && rawMsg.toLowerCase().includes("api key not valid"))
+        ) {
           throw new GeminiApiError(
             `Gemini API key error: ${rawMsg}. Please verify your API key in Settings (⚙️).`,
             res.status === 400 ? 400 : 401,
@@ -133,14 +205,7 @@ export async function callGeminiApi(options: {
           );
         }
 
-        if (res.status === 429) {
-          throw new GeminiApiError(
-            "Gemini rate limit exceeded. Please wait a moment or try another model in Settings.",
-            429,
-            "RATE_LIMITED"
-          );
-        }
-
+        // 4. Other client/upstream errors
         throw new GeminiApiError(
           `Gemini API error: ${rawMsg}`,
           res.status >= 400 && res.status < 500 ? res.status : 502,
@@ -158,22 +223,33 @@ export async function callGeminiApi(options: {
 
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) {
-        throw new GeminiApiError("No response generated by Gemini model.", 502, "EMPTY_RESPONSE");
+        console.warn(`[Gemini API] Model "${model}" responded HTTP 200 but returned no text parts.`);
+        lastError = new GeminiApiError("No response generated by Gemini model.", 502, "EMPTY_RESPONSE");
+        continue;
       }
+      console.log(`[Gemini API] Success! Model "${model}" generated ${text.length} characters.`);
       return text;
     } catch (err) {
       if (err instanceof GeminiApiError) {
-        if (err.status === 404) {
+        if (
+          err.status === 404 ||
+          err.status === 503 ||
+          err.status === 502 ||
+          err.status === 504 ||
+          err.status === 500 ||
+          err.status === 429 ||
+          err.code === "MODEL_NOT_FOUND" ||
+          err.code === "HIGH_DEMAND" ||
+          err.code === "RATE_LIMITED"
+        ) {
           lastError = err;
           continue;
         }
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (lastError.message.includes("404") || lastError.message.includes("not found")) {
-        continue;
-      }
-      throw lastError;
+      console.warn(`[Gemini API] Network or unexpected error on model "${model}":`, lastError.message);
+      continue;
     }
   }
 

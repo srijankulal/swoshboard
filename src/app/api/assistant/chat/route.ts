@@ -8,6 +8,7 @@ import {
   extractJsonFromResponse,
   GeminiApiError,
   LabAnalysisResult,
+  normalizeGeminiModel,
 } from "@/lib/gemini";
 import { simulateOracleSqlExecution } from "@/lib/sqlplus-emulator";
 
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
       mode = "structure", // 'structure' | 'chat' | 'testcases' | 'viva' | 'fix'
       history = [],
       apiKey,
-      model = "gemini-2.0-flash",
+      model = "gemini-3.8-flash",
     } = body as {
       message?: string;
       fileName?: string;
@@ -53,9 +54,20 @@ export async function POST(request: Request) {
       model?: string;
     };
 
+    const resolvedModel = normalizeGeminiModel(model);
+    console.log(
+      `[Assistant Route] POST /api/assistant/chat mode="${mode}", user="${user.email || user.id}", file="${fileName}", model="${model}" -> resolved="${resolvedModel}"`
+    );
+    console.log(
+      `[Assistant Route] Details: codeLength=${fileContent.length}, manualText=${manualText.length} chars, hasManualPdf=${Boolean(
+        inputPdfBase64
+      )}, manualFileId=${manualFileId || "none"}`
+    );
+
     // Fast-fail if no API key is available in request or server environment
     const effectiveKey = (apiKey?.trim() || process.env.GEMINI_API_KEY?.trim()) ?? "";
     if (!effectiveKey) {
+      console.warn("[Assistant Route] Request rejected: No Gemini API key provided in body or environment.");
       return NextResponse.json(
         {
           error:
@@ -65,6 +77,9 @@ export async function POST(request: Request) {
         { status: 401 }
       );
     }
+    console.log(
+      `[Assistant Route] Using API key prefix: "${effectiveKey.slice(0, 7)}..." (total length: ${effectiveKey.length})`
+    );
 
     // Guard against Vercel 4.5 MB request payload overflow
     if (inputPdfBase64 && inputPdfBase64.length > 5.5 * 1024 * 1024) {
@@ -123,23 +138,22 @@ export async function POST(request: Request) {
       subject === "oop"
         ? "OOP (Object-Oriented Programming in C++)"
         : subject === "dbms"
-        ? "DBMS (Database Management Systems with Oracle SQL*Plus)"
-        : subject === "wdu"
-        ? "WDU (Web Development: HTML, CSS, JavaScript)"
-        : "Computer Science Lab";
+          ? "DBMS (Database Management Systems with Oracle SQL*Plus)"
+          : subject === "wdu"
+            ? "WDU (Web Development: HTML, CSS, JavaScript)"
+            : "Computer Science Lab";
 
     const baseSystemPrompt = `You are an elite University Computer Science Lab Instructor and Lab Record Evaluator specializing in ${subjectTitle}.
 You format lab assignment solutions cleanly according to standard university lab record and viva guidelines.
 
 Student's Subject: ${subjectTitle}
 Current File Name: "${fileName}"
-${
-  pdfBase64
-    ? `The student has attached their official University Lab Manual as a PDF (${manualFileName || "Manual.pdf"}). Examine the PDF pages, locate the experiment/question that corresponds to the student's code in "${fileName}", and extract the exact question number, exact question statement from the manual, constraints, and test requirements.`
-    : manualText
-    ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""`
-    : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."
-}
+${pdfBase64
+        ? `The student has attached their official University Lab Manual as a PDF (${manualFileName || "Manual.pdf"}). Examine the PDF pages, locate the experiment/question that corresponds to the student's code in "${fileName}", and extract the exact question number, exact question statement from the manual, constraints, and test requirements.`
+        : manualText
+          ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""`
+          : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."
+      }
 `;
 
     // 1. Structured Lab Format Request
@@ -218,7 +232,7 @@ Output ONLY the raw JSON object. Do not wrap in markdown or add conversational p
         systemInstruction: baseSystemPrompt,
         pdfBase64,
         apiKey,
-        model,
+        model: resolvedModel,
         temperature: 0.1,
       });
 
@@ -268,7 +282,7 @@ Provide actual realistic inputs suitable for stdin (with newlines between values
         systemInstruction: baseSystemPrompt,
         pdfBase64,
         apiKey,
-        model,
+        model: resolvedModel,
         temperature: 0.1,
       });
 
@@ -299,7 +313,7 @@ Return a JSON array of objects with "question" and "answer" properties. Return O
         systemInstruction: baseSystemPrompt,
         pdfBase64,
         apiKey,
-        model,
+        model: resolvedModel,
         temperature: 0.2,
       });
 
@@ -331,7 +345,7 @@ Provide a clear, educational, and direct response formatted in GitHub Markdown.`
       systemInstruction: baseSystemPrompt,
       pdfBase64,
       apiKey,
-      model,
+      model: resolvedModel,
       temperature: 0.3,
     });
 
@@ -341,6 +355,7 @@ Provide a clear, educational, and direct response formatted in GitHub Markdown.`
       subject,
     });
   } catch (err) {
+    console.error("[Assistant Route Error] Execution failed:", err);
     if (err instanceof GeminiApiError) {
       return NextResponse.json(
         {
