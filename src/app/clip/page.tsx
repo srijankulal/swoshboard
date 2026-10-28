@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import ClipLandingClient from "./clip-landing-client";
+import ClipLandingClient from "@/app/clip/clip-landing-client";
 
 export const metadata: Metadata = {
   title: "Global Web Clipboard | Swoshboard - Instant Cross-Device Text Sharing",

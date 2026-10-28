@@ -1,21 +1,52 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+
+const DEFAULT_HOST = "swoshboard.vercel.app";
+const subscribeNoop = () => () => {};
 
 export default function ClipLandingClient() {
   const router = useRouter();
   const [slug, setSlug] = useState("");
   const [error, setError] = useState("");
 
-  const handleOpenClip = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const clean = slug
-      .trim()
+  const hostPrefix = useSyncExternalStore(
+    subscribeNoop,
+    () => window.location.host || DEFAULT_HOST,
+    () => DEFAULT_HOST
+  );
+
+  const sanitizeSlug = (raw: string): string => {
+    let clean = raw.trim();
+    // Support pasting full URLs (e.g. http://localhost:3000/clip/my-slug or https://swoshboard.vercel.app/clip/my-slug)
+    try {
+      if (clean.startsWith("http://") || clean.startsWith("https://")) {
+        const url = new URL(clean);
+        const parts = url.pathname.split("/").filter(Boolean);
+        const clipIdx = parts.indexOf("clip");
+        if (clipIdx !== -1 && parts[clipIdx + 1]) {
+          clean = parts[clipIdx + 1];
+        } else if (parts.length > 0) {
+          clean = parts[parts.length - 1];
+        }
+      }
+    } catch {
+      /* continue */
+    }
+
+    clean = clean.replace(/^https?:\/\/[^/]+/i, "");
+    clean = clean.replace(/^\/?clip\//i, "");
+    return clean
       .toLowerCase()
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "");
+  };
+
+  const handleOpenClip = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const clean = sanitizeSlug(slug);
 
     if (!clean) {
       setError("Please enter a clip name (letters, numbers, dashes).");
@@ -28,6 +59,8 @@ export default function ClipLandingClient() {
     const randomSlug = "clip-" + Math.random().toString(36).slice(2, 8);
     router.push(`/clip/${randomSlug}`);
   };
+
+  const previewSlug = sanitizeSlug(slug) || "your-custom-name";
 
   return (
     <div className="clip-hero">
@@ -42,27 +75,66 @@ export default function ClipLandingClient() {
       </p>
 
       {/* Input Box */}
-      <form onSubmit={handleOpenClip} className="clip-url-box">
-        <div className="clip-url-prefix">swoshboard.vercel.app/clip/</div>
-        <input
-          type="text"
-          className="clip-url-input"
-          placeholder="your-custom-name"
-          value={slug}
-          onChange={(e) => {
-            setSlug(e.target.value);
-            if (error) setError("");
-          }}
-          autoFocus
-          spellCheck={false}
-        />
+      <form onSubmit={handleOpenClip} className="clip-url-box" role="search">
+        <label htmlFor="clip-slug-input" className="visually-hidden">
+          Custom Clip Name or URL
+        </label>
+        <div className="clip-url-prefix" title="Public clip destination">
+          <span className="clip-url-icon" aria-hidden="true">🔗</span>
+          <span className="clip-url-domain">{hostPrefix}/clip/</span>
+        </div>
+        <div className="clip-url-input-wrap">
+          <input
+            id="clip-slug-input"
+            name="clipSlug"
+            type="text"
+            className="clip-url-input"
+            placeholder="your-custom-name"
+            value={slug}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              if (error) setError("");
+            }}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            aria-describedby="clip-url-hint"
+          />
+          {slug && (
+            <button
+              type="button"
+              className="clip-clear-btn"
+              onClick={() => {
+                setSlug("");
+                if (error) setError("");
+              }}
+              title="Clear text"
+              aria-label="Clear clip name"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <button type="submit" className="btn btn-primary clip-go-btn">
           <span>Go to Clip</span>
           <span aria-hidden="true">→</span>
         </button>
       </form>
 
-      {error && <div className="clip-error-banner">{error}</div>}
+      {/* Live Destination URL Preview */}
+      <div id="clip-url-hint" className="clip-url-hint">
+        <span>Destination:</span>{" "}
+        <code>
+          {hostPrefix}/clip/{previewSlug}
+        </code>
+      </div>
+
+      {error && (
+        <div className="clip-error-banner" role="alert">
+          <span className="error-icon" aria-hidden="true">⚠️</span>
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="clip-quick-row">
         <span>Need a clip right now?</span>

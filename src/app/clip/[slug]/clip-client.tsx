@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 
 interface GlobalClipData {
@@ -35,45 +35,52 @@ export default function ClipClient({ slug }: { slug: string }) {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const loadClip = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`/api/clip/${encodeURIComponent(slug)}`);
-      const data = await res.json();
-      if (res.ok && data.success) {
-        if (data.found && data.clip) {
-          const c = data.clip as GlobalClipData;
-          setContent(c.content || "");
-          setTitle(c.title || "");
-          setFormat(c.format || "text");
-          setIsLocked(Boolean(c.isLocked));
-          setBurnAfterReading(Boolean(c.burnAfterReading));
-          setViews(c.views || 1);
-          setLastSaved(c.updatedAt || Date.now());
-          if (c.expiresAt) {
-            const diffHours = Math.round((c.expiresAt - Date.now()) / (3600 * 1000));
-            setExpiryHours(diffHours > 0 ? diffHours : 0);
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const res = await fetch(`/api/clip/${encodeURIComponent(slug)}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (res.ok && data.success) {
+          if (data.found && data.clip) {
+            const c = data.clip as GlobalClipData;
+            setContent(c.content || "");
+            setTitle(c.title || "");
+            setFormat(c.format || "text");
+            setIsLocked(Boolean(c.isLocked));
+            setBurnAfterReading(Boolean(c.burnAfterReading));
+            setViews(c.views || 1);
+            setLastSaved(c.updatedAt || Date.now());
+            if (c.expiresAt) {
+              const diffHours = Math.round((c.expiresAt - Date.now()) / (3600 * 1000));
+              setExpiryHours(diffHours > 0 ? diffHours : 0);
+            }
+          } else {
+            // Empty new clip
+            setContent("");
+            setTitle("");
+            setLastSaved(null);
           }
         } else {
-          // Empty new clip
-          setContent("");
-          setTitle("");
-          setLastSaved(null);
+          setStatusMsg("Failed to load clip.");
         }
-      } else {
-        setStatusMsg("Failed to load clip.");
+      } catch {
+        if (!cancelled) setStatusMsg("Connection error loading clip.");
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setIsDirty(false);
+        }
       }
-    } catch {
-      setStatusMsg("Connection error loading clip.");
-    } finally {
-      setLoading(false);
-      setIsDirty(false);
-    }
-  }, [slug]);
+    };
 
-  useEffect(() => {
-    void loadClip();
-  }, [loadClip]);
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
 
   const handleSave = async () => {
     if (isLocked) {
@@ -311,8 +318,10 @@ export default function ClipClient({ slug }: { slug: string }) {
             </div>
 
             <div className="clip-option-group checkbox-group">
-              <label className="checkbox-label">
+              <label htmlFor="clip-burn-checkbox" className="checkbox-label">
                 <input
+                  id="clip-burn-checkbox"
+                  name="burnAfterReading"
                   type="checkbox"
                   checked={burnAfterReading}
                   onChange={(e) => {
@@ -325,8 +334,10 @@ export default function ClipClient({ slug }: { slug: string }) {
             </div>
 
             <div className="clip-option-group checkbox-group">
-              <label className="checkbox-label">
+              <label htmlFor="clip-locked-checkbox" className="checkbox-label">
                 <input
+                  id="clip-locked-checkbox"
+                  name="isLocked"
                   type="checkbox"
                   checked={isLocked}
                   onChange={(e) => {
@@ -367,7 +378,12 @@ export default function ClipClient({ slug }: { slug: string }) {
           </div>
         ) : (
           <div className="clip-textarea-wrapper">
+            <label htmlFor="clip-content-textarea" className="visually-hidden">
+              Clip Content
+            </label>
             <textarea
+              id="clip-content-textarea"
+              name="clipContent"
               ref={textareaRef}
               className={`clip-textarea format-${format}`}
               value={content}
