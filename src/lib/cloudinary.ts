@@ -47,12 +47,25 @@ export function signUpload(userId: string, safeName: string): SignedUpload {
 }
 
 export function signedDownloadUrl(publicId: string, deliveryType: DeliveryType = "authenticated"): string {
-  return cloudinary.url(publicId, {
-    resource_type: "raw",
-    type: deliveryType,
-    secure: true,
-    sign_url: true,
-  });
+  const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour expiration
+  const hasExt = publicId.lastIndexOf(".") > publicId.lastIndexOf("/");
+  const format = hasExt ? "" : "";
+
+  try {
+    return cloudinary.utils.private_download_url(publicId, format, {
+      resource_type: "raw",
+      type: deliveryType,
+      expires_at: expiresAt,
+      attachment: true,
+    });
+  } catch {
+    return cloudinary.url(publicId, {
+      resource_type: "raw",
+      type: deliveryType,
+      secure: true,
+      sign_url: true,
+    });
+  }
 }
 
 function isCloudinaryNotFound(error: unknown): boolean {

@@ -36,13 +36,54 @@ interface StructuredLabRecord {
   questionNumber: string;
   questionTitle: string;
   simplifiedQuestion: string;
+  conceptImplemented?: string;
   code: string;
   output: string;
+  interpretation?: string;
   testCases?: TestCase[];
   explanation?: string;
   vivaQuestions?: Array<{ question: string; answer: string }>;
   webFlow?: string;
 }
+
+export const SUBJECT_PROMPT_FLOWS: Record<
+  LabSubject,
+  {
+    name: string;
+    flowBadge: string;
+    description: string;
+    defaultPrompt: string;
+  }
+> = {
+  wdu: {
+    name: "Web (WDU)",
+    flowBadge: "Flow: 1. Concept Implemented → 2. Pure Code (No repetition/skipped notes) → 3. Interpretation",
+    description: "Web development flow: Concept implemented, clean source code, visual and event interpretation",
+    defaultPrompt:
+      "Format this web project into a university lab record. Flow:\n1. Concept Implemented / General Summary (Overview of HTML5/CSS3/JS concepts implemented)\n2. Source Code (Clean working code only; remove duplicate summary text and omit 'why skipped' commentary)\n3. Interpretation (Rendered visual layout, event listeners, and user interaction results).",
+  },
+  dbms: {
+    name: "DBMS (Oracle)",
+    flowBadge: "Flow: 1. Problem & Schema → 2. SQL Queries → 3. Oracle SQL*Plus Tabular Output → 4. Relational Interpretation",
+    description: "Database queries and Oracle SQL*Plus tabular terminal output",
+    defaultPrompt:
+      "Format this database query into a standard DBMS lab record. Flow:\n1. Objective & Relational Schema\n2. Clean SQL Queries\n3. Authentic Oracle SQL*Plus tabular terminal output\n4. Relational interpretation of retrieved data.",
+  },
+  oop: {
+    name: "OOP (C++)",
+    flowBadge: "Flow: 1. Aim & Concepts → 2. C++ Code → 3. 3 Test Cases & Console Outputs → 4. OOP Interpretation",
+    description: "Object-oriented C++ program with 3 test cases",
+    defaultPrompt:
+      "Format this C++ program into an OOP lab record. Flow:\n1. Aim & OOP Concepts implemented\n2. Clean C++ Source Code without redundant boilerplate\n3. 3 Test Cases (Standard, Boundary, Stress) with exact stdin/stdout\n4. Interpretation confirming OOP principles.",
+  },
+  general: {
+    name: "General CS",
+    flowBadge: "Flow: 1. Aim & Objective → 2. Source Code → 3. Execution Output → 4. Interpretation",
+    description: "Standard CS laboratory record",
+    defaultPrompt:
+      "Format this code into a formal lab record. Flow:\n1. Aim & Objective\n2. Source Code\n3. Output Results\n4. Interpretation & Conclusion.",
+  },
+};
 
 interface ChatMessage {
   id: string;
@@ -646,40 +687,76 @@ export function LabStudioModal({
     parts.push(`SUBJECT: ${r.subject.toUpperCase()}`);
     parts.push(`============================================================\n`);
 
-    parts.push(`[QUESTION / PROBLEM STATEMENT]:`);
-    parts.push(r.simplifiedQuestion || "Refer to lab manual.\n");
-
-    parts.push(`\n[SOURCE CODE]:`);
-    parts.push(r.code || code);
-
-    if (r.subject === "oop" && r.testCases && r.testCases.length > 0) {
-      parts.push(`\n[3 TEST CASES & OUTPUTS]:`);
-      r.testCases.forEach((tc, idx) => {
-        parts.push(`\n--- Test Case ${idx + 1}: ${tc.title} ---`);
-        parts.push(`INPUT:\n${tc.input || "<No input required>"}`);
-        parts.push(`OUTPUT:\n${tc.actualOutput || tc.expectedOutput || "<Executed output>"}`);
-      });
-    }
-
-    if (r.subject === "dbms") {
-      parts.push(`\n[ORACLE SQL*PLUS OUTPUT]:`);
-      parts.push(r.output);
-    }
-
     if (r.subject === "wdu") {
-      parts.push(`\n[WEB FLOW & ARCHITECTURE]:`);
-      parts.push(r.webFlow || "Visual component hierarchy and DOM events handled.");
-      parts.push(`\n[RENDERED OUTPUT]:`);
-      parts.push(r.output);
-    }
+      parts.push(`1. CONCEPT IMPLEMENTED / GENERAL SUMMARY:`);
+      parts.push(
+        r.conceptImplemented ||
+          r.simplifiedQuestion ||
+          "Web application layout, responsive styling, and client-side DOM events."
+      );
 
-    if (r.explanation) {
-      parts.push(`\n[EXPLANATION / KEY CONCEPTS]:`);
-      parts.push(r.explanation);
+      parts.push(`\n2. SOURCE CODE:`);
+      // Clean code: remove repetitive summary text or "why skipped" comments if present
+      const cleanCode = (r.code || code)
+        .replace(/\/\*[\s\S]*?(why skipped|skipped).*?\*\//gi, "")
+        .replace(/\/\/.*?(why skipped|skipped).*$/gmi, "")
+        .trim();
+      parts.push(cleanCode);
+
+      parts.push(`\n3. INTERPRETATION & OUTPUT:`);
+      parts.push(
+        r.interpretation ||
+          r.output ||
+          "Browser interprets DOM elements and executes event listeners as expected."
+      );
+    } else if (r.subject === "dbms") {
+      parts.push(`1. AIM / OBJECTIVE:`);
+      parts.push(r.conceptImplemented || r.simplifiedQuestion || "Database table operations and queries.");
+
+      parts.push(`\n2. SQL QUERIES:`);
+      parts.push(r.code || code);
+
+      parts.push(`\n3. ORACLE SQL*PLUS TABULAR OUTPUT:`);
+      parts.push(r.output);
+
+      parts.push(`\n4. RELATIONAL INTERPRETATION:`);
+      parts.push(r.interpretation || r.explanation || "Query execution successfully verified against schema.");
+    } else if (r.subject === "oop") {
+      parts.push(`1. AIM / OOP CONCEPTS IMPLEMENTED:`);
+      parts.push(r.conceptImplemented || r.simplifiedQuestion || "Object-Oriented Programming in C++.");
+
+      parts.push(`\n2. C++ SOURCE CODE:`);
+      parts.push(r.code || code);
+
+      if (r.testCases && r.testCases.length > 0) {
+        parts.push(`\n3. 3 TEST CASES & CONSOLE OUTPUTS:`);
+        r.testCases.forEach((tc, idx) => {
+          parts.push(`\n--- Test Case ${idx + 1}: ${tc.title} ---`);
+          parts.push(`INPUT:\n${tc.input || "<No input required>"}`);
+          parts.push(`OUTPUT:\n${tc.actualOutput || tc.expectedOutput || "<Executed output>"}`);
+        });
+      } else {
+        parts.push(`\n3. CONSOLE OUTPUT:\n${r.output}`);
+      }
+
+      parts.push(`\n4. INTERPRETATION / CONCLUSION:`);
+      parts.push(r.interpretation || r.explanation || "Execution satisfies problem requirements.");
+    } else {
+      parts.push(`1. AIM / GENERAL SUMMARY:`);
+      parts.push(r.conceptImplemented || r.simplifiedQuestion || "Laboratory experiment exercise.");
+
+      parts.push(`\n2. SOURCE CODE:`);
+      parts.push(r.code || code);
+
+      parts.push(`\n3. OUTPUT:`);
+      parts.push(r.output);
+
+      parts.push(`\n4. INTERPRETATION:`);
+      parts.push(r.interpretation || r.explanation || "Program logic verified.");
     }
 
     navigator.clipboard.writeText(parts.join("\n"));
-    onToast("success", "Copied to Clipboard", "Complete lab record copied, ready for submission.");
+    onToast("success", "Copied to Clipboard", "Complete lab record copied according to subject flow.");
   };
 
   // Keyboard navigation
@@ -1216,6 +1293,28 @@ export function LabStudioModal({
             <div className="lab-assistant-grid">
               {/* Left Pane: Quick Actions & Structured Output */}
               <div className="lab-assistant-left">
+                {/* Pre-Default Prompt & Subject Flow Selector Bar */}
+                <div className="lab-subject-flow-bar">
+                  <div className="lab-subject-pills">
+                    <span className="flow-label">Format Template:</span>
+                    {(["wdu", "dbms", "oop", "general"] as LabSubject[]).map((subjKey) => (
+                      <button
+                        key={subjKey}
+                        type="button"
+                        className={`btn-tag ${subject === subjKey ? "active" : ""}`}
+                        onClick={() => setSubject(subjKey)}
+                        title={SUBJECT_PROMPT_FLOWS[subjKey].description}
+                      >
+                        {SUBJECT_PROMPT_FLOWS[subjKey].name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="lab-flow-badge-info">
+                    <span className="flow-badge-icon">⚡</span>
+                    <span className="flow-badge-text">{SUBJECT_PROMPT_FLOWS[subject].flowBadge}</span>
+                  </div>
+                </div>
+
                 <div className="lab-assistant-actions-panel">
                   <div className="lab-quick-pills">
                     <button
@@ -1256,7 +1355,7 @@ export function LabStudioModal({
                   <div className="lab-record-card">
                     <div className="lab-record-header">
                       <div>
-                        <span className="lab-record-tag">{structuredRecord.subject.toUpperCase()} RECORD</span>
+                        <span className="lab-record-tag">{structuredRecord.subject.toUpperCase()} LAB RECORD</span>
                         <h3 className="lab-record-title">
                           {structuredRecord.questionNumber}: {structuredRecord.questionTitle}
                         </h3>
@@ -1264,55 +1363,152 @@ export function LabStudioModal({
                       <button
                         className="btn btn-sm btn-primary"
                         onClick={handleCopyStructuredRecord}
-                        title="Copy complete record to paste into Word or LaTeX"
+                        title="Copy complete record formatted according to subject flow"
                       >
                         📋 Copy Record
                       </button>
                     </div>
 
-                    <div className="lab-record-section">
-                      <h4>Problem Statement / Objective:</h4>
-                      <p>{structuredRecord.simplifiedQuestion}</p>
-                    </div>
-
-                    {structuredRecord.webFlow && (
-                      <div className="lab-record-section">
-                        <h4>Web Architecture & Layout Flow:</h4>
-                        <p>{structuredRecord.webFlow}</p>
-                      </div>
-                    )}
-
-                    {structuredRecord.subject === "oop" && structuredRecord.testCases && (
-                      <div className="lab-record-section">
-                        <h4>3 Test Cases & Execution Results:</h4>
-                        <div className="lab-record-testcases">
-                          {structuredRecord.testCases.map((tc, idx) => (
-                            <div key={idx} className="lab-record-tc-item">
-                              <span className="tc-heading">Test Case {idx + 1} ({tc.title}):</span>
-                              <div className="tc-io-grid">
-                                <div><strong>Input:</strong> <code>{tc.input.trim()}</code></div>
-                                <div><strong>Expected Output:</strong> <code>{tc.expectedOutput.trim()}</code></div>
-                              </div>
-                            </div>
-                          ))}
+                    {/* Web Dev (WDU) Flow: Concept -> Code -> Interpretation */}
+                    {structuredRecord.subject === "wdu" ? (
+                      <>
+                        <div className="lab-record-section">
+                          <h4>1. Concept Implemented / General Summary:</h4>
+                          <p>{structuredRecord.conceptImplemented || structuredRecord.simplifiedQuestion}</p>
                         </div>
-                      </div>
-                    )}
 
-                    <div className="lab-record-section">
-                      <h4>
-                        {structuredRecord.subject === "dbms"
-                          ? "Oracle SQL*Plus Tabular Output:"
-                          : "Program Output:"}
-                      </h4>
-                      <pre className="lab-record-output">{structuredRecord.output}</pre>
-                    </div>
+                        <div className="lab-record-section">
+                          <div className="section-header-row">
+                            <h4>2. Source Code:</h4>
+                            <button
+                              type="button"
+                              className="btn-text-xs"
+                              onClick={() => {
+                                const clean = (structuredRecord.code || code)
+                                  .replace(/\/\*[\s\S]*?(why skipped|skipped).*?\*\//gi, "")
+                                  .replace(/\/\/.*?(why skipped|skipped).*$/gmi, "")
+                                  .trim();
+                                navigator.clipboard.writeText(clean).then(() => onToast("success", "Copied", "Source code copied"));
+                              }}
+                            >
+                              Copy Code
+                            </button>
+                          </div>
+                          <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+                        </div>
 
-                    {structuredRecord.explanation && (
-                      <div className="lab-record-section">
-                        <h4>Key Concepts & Explanation:</h4>
-                        <p>{structuredRecord.explanation}</p>
-                      </div>
+                        <div className="lab-record-section">
+                          <h4>3. Interpretation &amp; Output:</h4>
+                          <p>{structuredRecord.interpretation || structuredRecord.output || "Interactive web components rendered with responsive layout."}</p>
+                          {structuredRecord.output && structuredRecord.interpretation && (
+                            <pre className="lab-record-output mt-2">{structuredRecord.output}</pre>
+                          )}
+                        </div>
+                      </>
+                    ) : structuredRecord.subject === "dbms" ? (
+                      /* DBMS Flow: Problem -> SQL -> Oracle SQL*Plus Tabular Output -> Relational Interpretation */
+                      <>
+                        <div className="lab-record-section">
+                          <h4>1. Objective &amp; Relational Schema:</h4>
+                          <p>{structuredRecord.conceptImplemented || structuredRecord.simplifiedQuestion}</p>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <div className="section-header-row">
+                            <h4>2. SQL Queries / Code:</h4>
+                            <button
+                              type="button"
+                              className="btn-text-xs"
+                              onClick={() => navigator.clipboard.writeText(structuredRecord.code || code).then(() => onToast("success", "Copied", "SQL copied"))}
+                            >
+                              Copy SQL
+                            </button>
+                          </div>
+                          <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <h4>3. Oracle SQL*Plus Tabular Output:</h4>
+                          <pre className="lab-record-output">{structuredRecord.output}</pre>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <h4>4. Relational Interpretation:</h4>
+                          <p>{structuredRecord.interpretation || structuredRecord.explanation || "Query execution verifies table integrity and constraints."}</p>
+                        </div>
+                      </>
+                    ) : structuredRecord.subject === "oop" ? (
+                      /* OOP Flow: Aim -> C++ Code -> 3 Test Cases -> Interpretation */
+                      <>
+                        <div className="lab-record-section">
+                          <h4>1. Aim &amp; OOP Concepts Implemented:</h4>
+                          <p>{structuredRecord.conceptImplemented || structuredRecord.simplifiedQuestion}</p>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <div className="section-header-row">
+                            <h4>2. C++ Source Code:</h4>
+                            <button
+                              type="button"
+                              className="btn-text-xs"
+                              onClick={() => navigator.clipboard.writeText(structuredRecord.code || code).then(() => onToast("success", "Copied", "C++ code copied"))}
+                            >
+                              Copy Code
+                            </button>
+                          </div>
+                          <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+                        </div>
+
+                        {structuredRecord.testCases && structuredRecord.testCases.length > 0 ? (
+                          <div className="lab-record-section">
+                            <h4>3. 3 Test Cases &amp; Console Execution Results:</h4>
+                            <div className="lab-record-testcases">
+                              {structuredRecord.testCases.map((tc, idx) => (
+                                <div key={idx} className="lab-record-tc-item">
+                                  <span className="tc-heading">Test Case {idx + 1} ({tc.title}):</span>
+                                  <div className="tc-io-grid">
+                                    <div><strong>Input:</strong> <code>{tc.input.trim() || "<No input>"}</code></div>
+                                    <div><strong>Output:</strong> <code>{tc.actualOutput || tc.expectedOutput || "<Executed output>"}</code></div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="lab-record-section">
+                            <h4>3. Console Output:</h4>
+                            <pre className="lab-record-output">{structuredRecord.output}</pre>
+                          </div>
+                        )}
+
+                        <div className="lab-record-section">
+                          <h4>4. OOP Interpretation &amp; Conclusion:</h4>
+                          <p>{structuredRecord.interpretation || structuredRecord.explanation || "Execution confirms expected OOP behavior."}</p>
+                        </div>
+                      </>
+                    ) : (
+                      /* General CS Flow */
+                      <>
+                        <div className="lab-record-section">
+                          <h4>1. Aim &amp; Objective:</h4>
+                          <p>{structuredRecord.conceptImplemented || structuredRecord.simplifiedQuestion}</p>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <h4>2. Source Code:</h4>
+                          <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <h4>3. Execution Output:</h4>
+                          <pre className="lab-record-output">{structuredRecord.output}</pre>
+                        </div>
+
+                        <div className="lab-record-section">
+                          <h4>4. Interpretation &amp; Conclusion:</h4>
+                          <p>{structuredRecord.interpretation || structuredRecord.explanation || "Program logic verified."}</p>
+                        </div>
+                      </>
                     )}
                   </div>
                 ) : (
@@ -1320,7 +1516,8 @@ export function LabStudioModal({
                     <span className="empty-icon">🤖</span>
                     <h3>Lab Record Assistant Ready</h3>
                     <p>
-                      Click <strong>&quot;Format for Lab Record&quot;</strong> above to auto-generate the complete question, code, 3 test cases (or Oracle SQL*Plus output), and explanations formatted for university submission.
+                      Selected format: <strong>{SUBJECT_PROMPT_FLOWS[subject].name}</strong>.
+                      Click <strong>&quot;Format for Lab Record&quot;</strong> above to generate the complete lab submission formatted according to the <strong>{subject.toUpperCase()}</strong> flow.
                     </p>
                   </div>
                 )}

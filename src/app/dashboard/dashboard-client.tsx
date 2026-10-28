@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { LabStudioModal } from "./lab-studio-modal";
 
 interface StoredFile {
@@ -845,18 +846,17 @@ export default function DashboardClient({ email }: { email: string }) {
     }
   };
 
-  const handleDownload = async (file: StoredFile) => {
+  const handleDownload = (file: StoredFile) => {
     try {
-      const res = await fetch(`/api/files/${file.id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not prepare download.");
-      if (data.success && data.url) {
-        await triggerBrowserDownload(data.url, file.name);
-      } else {
-        throw new Error("Invalid download URL in response");
-      }
+      const a = document.createElement("a");
+      a.href = `/api/files/${file.id}/download`;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      addToast("success", "Download Started", `Downloading ${file.name}...`);
     } catch (err) {
-      addToast("danger", "Download Failed", err instanceof Error ? err.message : "Unknown error");
+      addToast("danger", "Download Failed", err instanceof Error ? err.message : "Could not start download.");
     }
   };
 
@@ -864,21 +864,18 @@ export default function DashboardClient({ email }: { email: string }) {
     const selectedFilesList = files.filter((f) => mailSelected.has(f.id));
     if (selectedFilesList.length === 0) return;
 
-    for (const file of selectedFilesList) {
-      try {
-        const res = await fetch(`/api/files/${file.id}`);
-        const data = await res.json();
-        if (res.ok && data.success && data.url) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          await triggerBrowserDownload(data.url, file.name);
-        }
-      } catch (err) {
-        addToast(
-          "danger",
-          "Download Failed",
-          err instanceof Error ? err.message : `Failed to download ${file.name}`
-        );
+    addToast("info", "Downloading Files", `Downloading ${selectedFilesList.length} file(s)...`);
+    for (let i = 0; i < selectedFilesList.length; i++) {
+      const file = selectedFilesList[i];
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
+      const a = document.createElement("a");
+      a.href = `/api/files/${file.id}/download`;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   };
 
@@ -1235,7 +1232,7 @@ export default function DashboardClient({ email }: { email: string }) {
           </div>
           <div>
             <span className="logo-text">Swoshboard</span>
-            <span className="logo-badge">PERSONAL CLOUD &amp; MAIL</span>
+            <span className="logo-badge">PERSONAL CLOUD &amp; STORAGE</span>
           </div>
         </div>
 
@@ -1256,21 +1253,13 @@ export default function DashboardClient({ email }: { email: string }) {
             </span>
           </button>
 
-          <button
-            type="button"
-            className={`btn-secondary ${mailOpen ? "active-pill" : ""}`}
-            onClick={() => {
-              if (!mailOpen && !mailTo) setMailTo(email);
-              setMailOpen(!mailOpen);
-            }}
-            aria-expanded={mailOpen}
-            title="Quick Mail (Alt+M)"
+          <Link
+            href="/clip"
+            className="btn-secondary web-clip-btn"
+            title="Open Web Clipboard (cl1p.net style cross-device paste)"
           >
-            <span aria-hidden="true">✉️</span> <span className="header-btn-label">Quick Mail</span>
-            {mailSelected.size > 0 && (
-              <span className="header-badge">{mailSelected.size}</span>
-            )}
-          </button>
+            <span aria-hidden="true">🌐</span> <span className="header-btn-label">Web Clip</span>
+          </Link>
 
           <button
             type="button"
@@ -1726,18 +1715,6 @@ export default function DashboardClient({ email }: { email: string }) {
                       <button
                         type="button"
                         className="icon-btn"
-                        aria-label={`Email ${file.name}`}
-                        title="Quick Mail this file"
-                        onClick={() => handleQuickMailSingle(file)}
-                      >
-                        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                          <polyline points="22,6 12,13 2,6"></polyline>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn"
                         aria-label={`Move ${file.name}`}
                         title="Move to folder"
                         onClick={() => handleQuickMoveSingle(file)}
@@ -1947,17 +1924,6 @@ export default function DashboardClient({ email }: { email: string }) {
             </span>
           </div>
           <div className="floating-bar-buttons">
-            <button
-              type="button"
-              className="btn-primary btn-auto"
-              onClick={() => {
-                if (!mailTo) setMailTo(email);
-                setMailOpen(true);
-              }}
-              title="Quick Mail selected files"
-            >
-              <span aria-hidden="true">✉️</span> <span className="floating-btn-label">Mail</span>
-            </button>
             <button
               type="button"
               className="btn-secondary"
@@ -2336,15 +2302,14 @@ export default function DashboardClient({ email }: { email: string }) {
                   >
                     💾 Save as Clip
                   </button>
-                  <button
-                    type="button"
+                  <Link
+                    href="/clip"
+                    target="_blank"
                     className="btn-secondary"
-                    disabled={!scratchpad}
-                    onClick={handleInsertScratchpadToMail}
-                    title="Insert into Quick Mail body"
+                    title="Open Instant Web Clipboard (cl1p.net style)"
                   >
-                    ✉️ To Mail
-                  </button>
+                    🌐 Web Clip
+                  </Link>
                   <button
                     type="button"
                     className="btn-secondary danger-text"
@@ -2443,14 +2408,6 @@ export default function DashboardClient({ email }: { email: string }) {
                             title="Append to scratchpad"
                           >
                             To Scratchpad
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-secondary btn-sm"
-                            onClick={() => handleInsertClipToMail(clip)}
-                            title="Insert into Quick Mail"
-                          >
-                            To Mail
                           </button>
                           <button
                             type="button"

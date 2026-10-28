@@ -54,7 +54,12 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   }
 
   try {
-    return NextResponse.json({ success: true, url: await resolveSignedDownloadUrl(row.public_id) });
+    const signedUrl = await resolveSignedDownloadUrl(row.public_id);
+    return NextResponse.json({
+      success: true,
+      url: signedUrl,
+      downloadUrl: `/api/files/${id}/download`,
+    });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "File not found in storage.") {
       return NextResponse.json({ error: error.message }, { status: 404 });

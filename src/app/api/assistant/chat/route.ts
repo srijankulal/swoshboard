@@ -38,7 +38,7 @@ export async function POST(request: Request) {
       mode = "structure", // 'structure' | 'chat' | 'testcases' | 'viva' | 'fix'
       history = [],
       apiKey,
-      model = "gemini-2.5-flash",
+      model = "gemini-2.0-flash",
     } = body as {
       message?: string;
       fileName?: string;
@@ -152,8 +152,9 @@ ${
   "subject": "oop",
   "questionNumber": "e.g. Question 1 or Experiment 3",
   "questionTitle": "Concise title of the program",
-  "simplifiedQuestion": "Simplified, clean problem statement from the manual explaining what the program does",
-  "code": "The clean, formatted, well-commented C++ source code",
+  "simplifiedQuestion": "Clean problem statement from the lab manual",
+  "conceptImplemented": "Aim & OOP concepts implemented (e.g. Classes, Constructors, Operator Overloading, Inheritance)",
+  "code": "Clean, formatted C++ source code. Provide pure working code without repetitive summary text or commentary on why parts were skipped.",
   "testCases": [
     {
       "id": 1,
@@ -174,8 +175,9 @@ ${
       "expectedOutput": "Exact console output corresponding to this input"
     }
   ],
-  "output": "Complete terminal output showing the test runs",
-  "explanation": "Brief 3-4 bullet point explanation of the OOP concepts applied (classes, encapsulation, constructors, etc.)"
+  "output": "Complete terminal execution output",
+  "interpretation": "Interpretation of results explaining how output confirms the OOP principles implemented",
+  "explanation": "Core OOP design patterns and keywords used"
 }
 Output ONLY the raw JSON object. Do not wrap in markdown or add conversational preamble.`;
       } else if (subject === "dbms") {
@@ -184,10 +186,12 @@ Output ONLY the raw JSON object. Do not wrap in markdown or add conversational p
   "subject": "dbms",
   "questionNumber": "e.g. Question 2 or Query Experiment 4",
   "questionTitle": "Title of SQL problem / query",
-  "simplifiedQuestion": "Clear requirement describing the table schema, constraints, and query objective",
-  "code": "Clean, formatted SQL statements with proper capitalization and semicolons",
+  "simplifiedQuestion": "Clear problem statement describing the schema, constraints, and query objective",
+  "conceptImplemented": "Relational database concepts implemented (e.g. DDL constraints, GROUP BY, Subqueries, Joins)",
+  "code": "Clean, formatted SQL statements with proper capitalization and semicolons. No repetitive summary text.",
   "output": "Authentic Oracle SQL*Plus formatted output including 'SQL> ', table columns, hyphens, and row count feedback (e.g. '1 row created.', '4 rows selected.')",
-  "explanation": "Key relational concepts and SQL clauses used (e.g. INNER JOIN, GROUP BY, subquery)"
+  "interpretation": "Relational interpretation: What data was retrieved, integrity constraints verified, and query plan efficiency",
+  "explanation": "Key relational concepts and SQL clauses used"
 }
 Output ONLY the raw JSON object. Do not wrap in markdown or add conversational preamble.`;
       } else if (subject === "wdu") {
@@ -197,14 +201,16 @@ Output ONLY the raw JSON object. Do not wrap in markdown or add conversational p
   "questionNumber": "e.g. Question 3 or Web Lab Exercise 2",
   "questionTitle": "Title of the Web Application / Page",
   "simplifiedQuestion": "Objective and functional requirements of the web layout and scripts",
-  "code": "Clean HTML/CSS/JavaScript code",
-  "webFlow": "Step-by-step description of component hierarchy, event handling, and UI layout flow",
-  "output": "Description of the live rendered visual output, user interactions, and console responses",
-  "explanation": "DOM methods, CSS flex/grid layout, and events used"
+  "conceptImplemented": "Concept implemented & general summary (e.g. Responsive Grid Layout, DOM Events, Form Validation)",
+  "code": "Complete, clean HTML/CSS/JavaScript code. CRITICAL: Strictly provide pure working code ONLY. Do NOT add repetitive summary text inside the code, do NOT write explanations about why sections were skipped, and eliminate redundant boilerplate.",
+  "interpretation": "Interpretation of results: How the layout renders, DOM events respond, and user interaction flow",
+  "output": "Summary of visual rendered layout and user interaction results",
+  "explanation": "DOM methods, CSS flex/grid layout, and events used",
+  "webFlow": "Concept implemented -> Source Code -> Browser Interpretation"
 }
 Output ONLY the raw JSON object. Do not wrap in markdown or add conversational preamble.`;
       } else {
-        prompt += `Return a valid JSON object with keys: "subject", "questionNumber", "questionTitle", "simplifiedQuestion", "code", "output", "explanation". Output ONLY raw JSON.`;
+        prompt += `Return a valid JSON object with keys: "subject", "questionNumber", "questionTitle", "simplifiedQuestion", "conceptImplemented", "code", "output", "interpretation", "explanation". Output ONLY raw JSON.`;
       }
 
       const rawResponse = await callGeminiApi({

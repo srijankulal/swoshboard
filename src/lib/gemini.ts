@@ -13,8 +13,10 @@ export interface LabAnalysisResult {
   questionNumber: string;
   questionTitle: string;
   simplifiedQuestion: string;
+  conceptImplemented?: string;
   code: string;
   output: string;
+  interpretation?: string;
   testCases?: Array<{
     id: number;
     title: string;
@@ -41,7 +43,7 @@ export class GeminiApiError extends Error {
   }
 }
 
-const DEFAULT_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+const DEFAULT_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
 
 export async function callGeminiApi(options: {
   prompt: string;

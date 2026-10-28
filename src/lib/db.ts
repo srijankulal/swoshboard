@@ -130,6 +130,40 @@ export async function initDb(): Promise<void> {
   await db.execute(`
     CREATE INDEX IF NOT EXISTS idx_clipboard_clips_user ON clipboard_clips(user_id, created_at DESC)
   `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS global_clips (
+      slug TEXT PRIMARY KEY,
+      title TEXT,
+      content TEXT NOT NULL DEFAULT '',
+      format TEXT NOT NULL DEFAULT 'text',
+      is_locked INTEGER NOT NULL DEFAULT 0,
+      views INTEGER NOT NULL DEFAULT 0,
+      burn_after_reading INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  try {
+    await db.execute(`
+      CREATE INDEX IF NOT EXISTS idx_global_clips_updated ON global_clips(updated_at DESC)
+    `);
+  } catch {
+    // index already exists
+  }
+}
+
+export interface GlobalClipRow {
+  slug: string;
+  title: string | null;
+  content: string;
+  format: string;
+  is_locked: number;
+  views: number;
+  burn_after_reading: number;
+  expires_at: number | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface ClipboardClipRow {
