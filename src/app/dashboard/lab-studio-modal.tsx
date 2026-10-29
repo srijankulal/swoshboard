@@ -44,6 +44,9 @@ interface StructuredLabRecord {
   explanation?: string;
   vivaQuestions?: Array<{ question: string; answer: string }>;
   webFlow?: string;
+  tagsAndAttributes?: Array<{ name: string; description: string }>;
+  jsConcepts?: Array<{ name: string; description: string }>;
+  files?: Array<{ name: string; title?: string; code: string }>;
 }
 
 export const SUBJECT_PROMPT_FLOWS: Record<
@@ -57,10 +60,10 @@ export const SUBJECT_PROMPT_FLOWS: Record<
 > = {
   wdu: {
     name: "Web (WDU)",
-    flowBadge: "Flow: 1. Concept Implemented → 2. Pure Code (No repetition/skipped notes) → 3. Interpretation",
-    description: "Web development flow: Concept implemented, clean source code, visual and event interpretation",
+    flowBadge: "Flow: Question → 1. Concepts (Tags, Attributes & JS) → 2. Code → 3. Interpretation",
+    description: "Web observation structure: Question, tags & attributes, JS concepts, clean code, interpretation",
     defaultPrompt:
-      "Format this web project into a university lab record. Flow:\n1. Concept Implemented / General Summary (Overview of HTML5/CSS3/JS concepts implemented)\n2. Source Code (Clean working code only; remove duplicate summary text and omit 'why skipped' commentary)\n3. Interpretation (Rendered visual layout, event listeners, and user interaction results).",
+      "Format this web project into a university lab observation record.\n- Question: Exact problem statement from lab manual\n- 1. Concepts Implemented: HTML tags & attributes and JavaScript concepts\n- 2. Code: Clean working code without repetitive notes\n- 3. Interpretation: Comprehensive execution & learning takeaway.",
   },
   dbms: {
     name: "DBMS (Oracle)",
@@ -128,6 +131,9 @@ export function LabStudioModal({
   const [manualUploadName, setManualUploadName] = useState<string>("");
   const manualUploadInputRef = useRef<HTMLInputElement>(null);
   const [manualText, setManualText] = useState<string>("");
+  const [manualQuestions, setManualQuestions] = useState<Array<{ number: string; title: string; statement: string }>>([]);
+  const [selectedQuestionText, setSelectedQuestionText] = useState<string>("");
+  const [isExtractingQuestions, setIsExtractingQuestions] = useState<boolean>(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -151,6 +157,8 @@ export function LabStudioModal({
         if (savedFileId) setManualFileId(savedFileId);
         const savedManual = localStorage.getItem("swosh_lab_manual");
         if (savedManual) setManualText(savedManual);
+        const savedQuestion = localStorage.getItem("swosh_selected_question");
+        if (savedQuestion) setSelectedQuestionText(savedQuestion);
       } catch {
         /* ignore */
       }
@@ -574,6 +582,56 @@ export function LabStudioModal({
     }
   };
 
+  // AI Assistant: Extract Question Bank from Manual
+  const handleExtractQuestionsFromManual = async () => {
+    if (!manualPdfBase64 && !manualFileId && !manualText) {
+      setManualOpen(true);
+      onToast("info", "Attach Lab Manual", "Please attach a PDF manual or paste text to extract questions.");
+      return;
+    }
+
+    setIsExtractingQuestions(true);
+    onToast("info", "Extracting Questions", "Analyzing lab manual with AI...");
+    try {
+      const res = await fetch("/api/assistant/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "questions",
+          fileName,
+          fileContent: code,
+          manualText,
+          manualFileId: manualFileId || undefined,
+          manualPdfBase64: manualPdfBase64 || undefined,
+          apiKey,
+          model: selectedModel,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to extract questions.");
+
+      if (data.questions && data.questions.length > 0) {
+        setManualQuestions(data.questions);
+        if (!selectedQuestionText) {
+          setSelectedQuestionText(data.questions[0].statement);
+          try {
+            localStorage.setItem("swosh_selected_question", data.questions[0].statement);
+          } catch {
+            /* ignore */
+          }
+        }
+        onToast("success", "Questions Extracted", `Found ${data.questions.length} experiment questions in manual.`);
+      } else {
+        onToast("info", "No Questions Detected", "You can type or paste the exact question statement below.");
+      }
+    } catch (err) {
+      onToast("danger", "Extraction Error", err instanceof Error ? err.message : "Failed to extract questions.");
+    } finally {
+      setIsExtractingQuestions(false);
+    }
+  };
+
   // AI Assistant: Generate Structured Lab Record
   const handleGenerateStructuredRecord = async () => {
     if (!code.trim()) {
@@ -591,6 +649,7 @@ export function LabStudioModal({
       hasManualPdf: Boolean(manualPdfBase64),
       manualFileId,
       hasCustomApiKey: Boolean(apiKey),
+      hasSelectedQuestion: Boolean(selectedQuestionText),
     });
 
     try {
@@ -607,6 +666,7 @@ export function LabStudioModal({
           subject,
           apiKey,
           model: selectedModel,
+          selectedQuestion: selectedQuestionText || undefined,
         }),
       });
 
@@ -740,27 +800,56 @@ export function LabStudioModal({
     parts.push(`============================================================\n`);
 
     if (r.subject === "wdu") {
-      parts.push(`1. CONCEPT IMPLEMENTED / GENERAL SUMMARY:`);
+      parts.push(`Question`);
       parts.push(
-        r.conceptImplemented ||
-          r.simplifiedQuestion ||
-          "Web application layout, responsive styling, and client-side DOM events."
+        r.simplifiedQuestion ||
+          selectedQuestionText ||
+          r.questionTitle ||
+          "Write HTML and JavaScript programs to demonstrate web concepts."
       );
 
-      parts.push(`\n2. SOURCE CODE:`);
-      // Clean code: remove repetitive summary text or "why skipped" comments if present
-      const cleanCode = (r.code || code)
-        .replace(/\/\*[\s\S]*?(why skipped|skipped).*?\*\//gi, "")
-        .replace(/\/\/.*?(why skipped|skipped).*$/gmi, "")
-        .trim();
-      parts.push(cleanCode);
+      parts.push(`\n1. Concepts Implemented (Tags & Attributes)`);
+      if (r.tagsAndAttributes && r.tagsAndAttributes.length > 0) {
+        r.tagsAndAttributes.forEach((t) => {
+          parts.push(`${t.name}: ${t.description}`);
+        });
+      } else {
+        parts.push(
+          r.conceptImplemented ||
+            "HTML5 layout tags, embedded CSS styles, form inputs, and event listeners."
+        );
+      }
 
-      parts.push(`\n3. INTERPRETATION & OUTPUT:`);
-      parts.push(
-        r.interpretation ||
-          r.output ||
-          "Browser interprets DOM elements and executes event listeners as expected."
-      );
+      if (r.jsConcepts && r.jsConcepts.length > 0) {
+        parts.push(`\nJavaScript Concepts Implemented`);
+        r.jsConcepts.forEach((j) => {
+          parts.push(`${j.name}: ${j.description}`);
+        });
+      }
+
+      parts.push(`\n2. Code`);
+      if (r.files && r.files.length > 0) {
+        r.files.forEach((f, idx) => {
+          parts.push(`File ${idx + 1}: ${f.name}${f.title ? ` (${f.title})` : ""}`);
+          parts.push(`HTML`);
+          parts.push(f.code.trim());
+          parts.push("");
+        });
+      } else {
+        const cleanCode = (r.code || code)
+          .replace(/\/\*[\s\S]*?(why skipped|skipped).*?\*\//gi, "")
+          .replace(/\/\/.*?(why skipped|skipped).*$/gmi, "")
+          .trim();
+        parts.push(cleanCode);
+      }
+
+      parts.push(`\n3. Interpretation`);
+      const interpText = r.interpretation?.trim() || "";
+      if (interpText.toUpperCase().startsWith("INTERPRETATION:")) {
+        parts.push(interpText);
+      } else {
+        parts.push(`INTERPRETATION:\n${interpText || "The program creates interactive web pages demonstrating JavaScript popup dialogs, form input handling, and dynamic window generation..."}`);
+      }
     } else if (r.subject === "dbms") {
       parts.push(`1. AIM / OBJECTIVE:`);
       parts.push(r.conceptImplemented || r.simplifiedQuestion || "Database table operations and queries.");
@@ -1369,6 +1458,111 @@ export function LabStudioModal({
                   </div>
                 </div>
 
+                {/* University Lab Manual Question Selector Card */}
+                <div className="lab-manual-question-box">
+                  <div className="question-box-header">
+                    <div className="question-box-title">
+                      <span className="question-icon">📖</span>
+                      <span className="question-title-text">Lab Manual Question</span>
+                      {hasActiveManual ? (
+                        <span className="question-manual-badge" title="Linked to attached manual">
+                          ✓ {activeManualName}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="question-manual-link-btn"
+                          onClick={() => setManualOpen(true)}
+                          title="Attach PDF Manual to extract questions"
+                        >
+                          📎 Attach PDF Manual
+                        </button>
+                      )}
+                    </div>
+                    <div className="question-box-actions">
+                      {(hasActiveManual || manualText) && (
+                        <button
+                          type="button"
+                          className="btn-text-xs"
+                          onClick={handleExtractQuestionsFromManual}
+                          disabled={isExtractingQuestions}
+                          title="Extract all questions from the lab manual"
+                        >
+                          {isExtractingQuestions ? "Extracting..." : "⚡ Extract Questions"}
+                        </button>
+                      )}
+                      {selectedQuestionText && (
+                        <button
+                          type="button"
+                          className="btn-text-xs"
+                          onClick={() => {
+                            setSelectedQuestionText("");
+                            try {
+                              localStorage.removeItem("swosh_selected_question");
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          title="Clear selected question"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {manualQuestions.length > 0 && (
+                    <div className="question-dropdown-row">
+                      <label htmlFor="manual-question-dropdown" className="visually-hidden">
+                        Select Experiment Question from Manual
+                      </label>
+                      <select
+                        id="manual-question-dropdown"
+                        className="form-select form-select-sm"
+                        value={selectedQuestionText}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedQuestionText(val);
+                          try {
+                            if (val) localStorage.setItem("swosh_selected_question", val);
+                            else localStorage.removeItem("swosh_selected_question");
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                      >
+                        <option value="">-- Choose question from manual ({manualQuestions.length} found) --</option>
+                        {manualQuestions.map((q, idx) => (
+                          <option key={idx} value={q.statement}>
+                            {q.number ? `${q.number}: ` : ""}{q.title || q.statement.slice(0, 75) + "..."}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <textarea
+                    className="lab-question-input"
+                    rows={2}
+                    placeholder={
+                      hasActiveManual
+                        ? 'Click "Extract Questions" above or type/paste the exact question statement from your manual...'
+                        : 'Attach your manual (PDF) or type/paste the exact question statement from your syllabus...'
+                    }
+                    value={selectedQuestionText}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedQuestionText(val);
+                      try {
+                        if (val) localStorage.setItem("swosh_selected_question", val);
+                        else localStorage.removeItem("swosh_selected_question");
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                </div>
+
                 <div className="lab-assistant-actions-panel">
                   <div className="lab-quick-pills">
                     <button
@@ -1423,12 +1617,45 @@ export function LabStudioModal({
                       </button>
                     </div>
 
-                    {/* Web Dev (WDU) Flow: Concept -> Code -> Interpretation */}
+                    {/* Web Dev (WDU) Flow: Question -> 1. Concepts (Tags & Attributes, JS) -> 2. Code -> 3. Interpretation */}
                     {structuredRecord.subject === "wdu" ? (
                       <>
+                        <div className="lab-record-section question-section">
+                          <h4>Question:</h4>
+                          <p className="lab-question-statement">
+                            {structuredRecord.simplifiedQuestion ||
+                              selectedQuestionText ||
+                              structuredRecord.questionTitle ||
+                              "Write HTML and JavaScript programs to demonstrate web concepts."}
+                          </p>
+                        </div>
+
                         <div className="lab-record-section">
-                          <h4>1. Concept Implemented / General Summary:</h4>
-                          <p>{structuredRecord.conceptImplemented || structuredRecord.simplifiedQuestion}</p>
+                          <h4>1. Concepts Implemented (Tags &amp; Attributes):</h4>
+                          {structuredRecord.tagsAndAttributes && structuredRecord.tagsAndAttributes.length > 0 ? (
+                            <ul className="lab-concept-list">
+                              {structuredRecord.tagsAndAttributes.map((item, idx) => (
+                                <li key={idx}>
+                                  <strong><code>{item.name}</code></strong>: {item.description}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p>{structuredRecord.conceptImplemented || "HTML5 layout tags, embedded CSS styles, and interactive elements."}</p>
+                          )}
+
+                          {structuredRecord.jsConcepts && structuredRecord.jsConcepts.length > 0 && (
+                            <>
+                              <h5 className="sub-heading">JavaScript Concepts Implemented:</h5>
+                              <ul className="lab-concept-list">
+                                {structuredRecord.jsConcepts.map((item, idx) => (
+                                  <li key={idx}>
+                                    <strong><code>{item.name}</code></strong>: {item.description}
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
                         </div>
 
                         <div className="lab-record-section">
@@ -1445,18 +1672,48 @@ export function LabStudioModal({
                                 navigator.clipboard.writeText(clean).then(() => onToast("success", "Copied", "Source code copied"));
                               }}
                             >
-                              Copy Code
+                              Copy All Code
                             </button>
                           </div>
-                          <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+
+                          {structuredRecord.files && structuredRecord.files.length > 0 ? (
+                            <div className="lab-multifile-container">
+                              {structuredRecord.files.map((file, idx) => (
+                                <div key={idx} className="lab-file-block">
+                                  <div className="file-header">
+                                    <span className="file-name">
+                                      File {idx + 1}: {file.name}{file.title ? ` (${file.title})` : ""}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="btn-text-xs"
+                                      onClick={() => {
+                                        navigator.clipboard
+                                          .writeText(file.code.trim())
+                                          .then(() => onToast("success", "Copied", `${file.name} copied`));
+                                      }}
+                                    >
+                                      Copy File
+                                    </button>
+                                  </div>
+                                  <pre className="lab-record-code">{file.code.trim()}</pre>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <pre className="lab-record-code">{structuredRecord.code || code}</pre>
+                          )}
                         </div>
 
                         <div className="lab-record-section">
-                          <h4>3. Interpretation &amp; Output:</h4>
-                          <p>{structuredRecord.interpretation || structuredRecord.output || "Interactive web components rendered with responsive layout."}</p>
-                          {structuredRecord.output && structuredRecord.interpretation && (
-                            <pre className="lab-record-output mt-2">{structuredRecord.output}</pre>
-                          )}
+                          <h4>3. Interpretation:</h4>
+                          <div className="lab-interpretation-text">
+                            <p>
+                              {structuredRecord.interpretation ||
+                                structuredRecord.output ||
+                                "Interactive web components rendered with responsive layout."}
+                            </p>
+                          </div>
                         </div>
                       </>
                     ) : structuredRecord.subject === "dbms" ? (

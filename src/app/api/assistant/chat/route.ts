@@ -36,10 +36,11 @@ export async function POST(request: Request) {
       manualPdfBase64: inputPdfBase64,
       manualFileId,
       subject: requestedSubject,
-      mode = "structure", // 'structure' | 'chat' | 'testcases' | 'viva' | 'fix'
+      mode = "structure", // 'structure' | 'chat' | 'testcases' | 'viva' | 'fix' | 'questions'
       history = [],
       apiKey,
       model = "gemini-3.8-flash",
+      selectedQuestion = "",
     } = body as {
       message?: string;
       fileName?: string;
@@ -52,11 +53,12 @@ export async function POST(request: Request) {
       history?: Array<{ role: string; content: string }>;
       apiKey?: string;
       model?: string;
+      selectedQuestion?: string;
     };
 
     const resolvedModel = normalizeGeminiModel(model);
     console.log(
-      `[Assistant Route] POST /api/assistant/chat mode="${mode}", user="${user.email || user.id}", file="${fileName}", model="${model}" -> resolved="${resolvedModel}"`
+      `[Assistant Route] POST /api/assistant/chat mode="${mode}", user="${user.email || user.id}", file="${fileName}", model="${model}" -> resolved="${resolvedModel}", hasSelectedQuestion=${Boolean(selectedQuestion)}`
     );
     console.log(
       `[Assistant Route] Details: codeLength=${fileContent.length}, manualText=${manualText.length} chars, hasManualPdf=${Boolean(
@@ -148,13 +150,64 @@ You format lab assignment solutions cleanly according to standard university lab
 
 Student's Subject: ${subjectTitle}
 Current File Name: "${fileName}"
-${pdfBase64
-        ? `The student has attached their official University Lab Manual as a PDF (${manualFileName || "Manual.pdf"}). Examine the PDF pages, locate the experiment/question that corresponds to the student's code in "${fileName}", and extract the exact question number, exact question statement from the manual, constraints, and test requirements.`
-        : manualText
-          ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""`
-          : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."
-      }
+${
+  selectedQuestion
+    ? `The student has selected this specific Question / Problem Statement from their University Lab Manual:
+"""
+${selectedQuestion}
+"""
+You MUST use this EXACT question statement for the record's Question / simplifiedQuestion and align all concepts, code, and interpretation directly with it.`
+    : pdfBase64
+      ? `The student has attached their official University Lab Manual as a PDF (${manualFileName || "Manual.pdf"}). Examine the PDF pages, locate the experiment/question that corresponds to the student's code in "${fileName}", and extract the exact question number, exact question statement from the manual, constraints, and test requirements.`
+      : manualText
+        ? `Lab Manual / Question Bank Provided by Student:\n"""\n${manualText}\n"""`
+        : "No manual provided. Deduce the question statement, objective, and question number from comments and code logic."
+}
 `;
+
+    // 0. Extract Question Bank from Lab Manual
+    if (mode === "questions") {
+      if (!pdfBase64 && !manualText) {
+        return NextResponse.json(
+          {
+            error: "No lab manual attached. Please upload a PDF manual or paste your lab manual text first.",
+            code: "NO_MANUAL",
+          },
+          { status: 400 }
+        );
+      }
+
+      const questionsPrompt = `Carefully review this University Lab Manual (${manualFileName || "Manual"}).
+Extract all lab experiment questions, exercises, and problem statements contained in it.
+Return a valid JSON array of objects with the following schema:
+[
+  {
+    "number": "Experiment 1",
+    "title": "Short title of the experiment",
+    "statement": "Complete exact problem statement from the manual (e.g. Write HTML and JavaScript programs to demonstrate: JavaScript Dialog Boxes... Window Manipulation... Dropdown Selection...)"
+  }
+]
+Extract all experiments clearly. Output ONLY the raw JSON array without conversational markdown or text.`;
+
+      const rawQuestionsResponse = await callGeminiApi({
+        prompt: questionsPrompt,
+        systemInstruction: "You are an academic lab coordinator extracting a structured list of experiment questions from a university laboratory manual.",
+        pdfBase64,
+        apiKey,
+        model: resolvedModel,
+        temperature: 0.1,
+      });
+
+      const extractedQuestions = extractJsonFromResponse<Array<{ number: string; title: string; statement: string }>>(
+        rawQuestionsResponse
+      );
+
+      return NextResponse.json({
+        success: true,
+        questions: extractedQuestions || [],
+        manualFileName: manualFileName || "Manual",
+      });
+    }
 
     // 1. Structured Lab Format Request
     if (mode === "structure" || message.toLowerCase().includes("format for lab record") || message.toLowerCase().includes("lab record")) {
@@ -209,18 +262,47 @@ Output ONLY the raw JSON object. Do not wrap in markdown or add conversational p
 }
 Output ONLY the raw JSON object. Do not wrap in markdown or add conversational preamble.`;
       } else if (subject === "wdu") {
-        prompt += `Return a valid JSON object with the following schema:
+        prompt += `Return a valid JSON object strictly matching this university lab observation structure:
 {
   "subject": "wdu",
-  "questionNumber": "e.g. Question 3 or Web Lab Exercise 2",
-  "questionTitle": "Title of the Web Application / Page",
-  "simplifiedQuestion": "Objective and functional requirements of the web layout and scripts",
-  "conceptImplemented": "Concept implemented & general summary (e.g. Responsive Grid Layout, DOM Events, Form Validation)",
-  "code": "Complete, clean HTML/CSS/JavaScript code. CRITICAL: Strictly provide pure working code ONLY. Do NOT add repetitive summary text inside the code, do NOT write explanations about why sections were skipped, and eliminate redundant boilerplate.",
-  "interpretation": "Interpretation of results: How the layout renders, DOM events respond, and user interaction flow",
-  "output": "Summary of visual rendered layout and user interaction results",
-  "explanation": "DOM methods, CSS flex/grid layout, and events used",
-  "webFlow": "Concept implemented -> Source Code -> Browser Interpretation"
+  "questionNumber": "e.g. Question 1 or Experiment 3",
+  "questionTitle": "Title of the experiment / assignment (e.g. JavaScript Dialog Boxes, Window Manipulation & Dropdown Selection)",
+  "simplifiedQuestion": "The complete, exact question statement from the manual (e.g. Write HTML and JavaScript programs to demonstrate:\\nJavaScript Dialog Boxes: Using alert(), confirm(), and prompt() dialog boxes for notifications, user confirmation, and dynamic data input.\\nWindow Manipulation: Validating user credentials against an array, prompting for custom text, and opening a dynamic new browser window using window.open() and document.writeln().\\nDropdown Selection: Dynamically selecting options from an HTML <select> dropdown and handling user interactions with JavaScript.)",
+  "conceptImplemented": "High-level summary of concepts implemented",
+  "tagsAndAttributes": [
+    { "name": "<!DOCTYPE html>", "description": "Declares the document type as standard HTML5 to ensure proper parsing across modern browsers." },
+    { "name": "<html lang>", "description": "Root element wrapping all HTML tags; lang specifies the primary language (en)." },
+    { "name": "<head>", "description": "Contains non-visible page metadata, titles, and embedded CSS styling declarations." },
+    { "name": "<title>", "description": "Defines the title of the webpage displayed on the browser tab." },
+    { "name": "<style>", "description": "Encloses internal CSS style rules for flexbox centering, layout spacing, and margins." },
+    { "name": "<body>", "description": "Encapsulates all visible layout content rendered on the webpage." },
+    { "name": "<h1>", "description": "Displays top-level headings to label the program or module." },
+    { "name": "<div>", "description": "Generic block container used with CSS Flexbox to center components and group form elements." },
+    { "name": "<label for>", "description": "Identifies descriptive text bound to input controls." },
+    { "name": "<input id, class>", "description": "Interactive text field used to capture the user login name." },
+    { "name": "<select id, class> / <option>", "description": "Dropdown menu container and its selectable choice items." },
+    { "name": "<button onclick>", "description": "Clickable action button triggering specific JavaScript functions via the onclick event listener." },
+    { "name": "<script>", "description": "Encloses JavaScript logic for event handling, window operations, and DOM manipulation." }
+  ],
+  "jsConcepts": [
+    { "name": "alert()", "description": "Displays an informational modal dialog box with an OK button." },
+    { "name": "confirm()", "description": "Displays a confirmation box with OK and Cancel buttons, returning a boolean (true/false)." },
+    { "name": "prompt()", "description": "Opens an input dialog box allowing the user to enter text values." },
+    { "name": "document.getElementById().value", "description": "Retrieves the current text value entered into an HTML input field." },
+    { "name": "window.open()", "description": "Opens a new browser tab or blank window (_blank) dynamically." },
+    { "name": "document.writeln()", "description": "Writes raw HTML content directly to the newly opened window document." },
+    { "name": "Array Search & Conditional Loops", "description": "Iterates through an array of authorized usernames using for...in and validates matches." }
+  ],
+  "files": [
+    {
+      "name": "index_2.html",
+      "title": "JS Dialog Boxes",
+      "code": "<!DOCTYPE html>\\n<html lang=\\"en\\">...</html>"
+    }
+  ],
+  "code": "Clean, formatted HTML/CSS/JavaScript code. Provide complete working code. Strictly pure code ONLY without repetitive summary text inside the code or comments explaining why parts were skipped.",
+  "interpretation": "INTERPRETATION:\\nThe program creates interactive web pages demonstrating JavaScript popup dialogs, form input handling, and dynamic window generation. In the first module, built-in dialog methods—alert(), confirm(), and prompt()—are invoked via button clicks to notify the user, verify deletions, and capture runtime textual input. In the second module, user credentials entered into an <input> element are verified against an authorized array (user). Upon successful verification, prompt() collects a custom greeting, and window.open() creates a new browser tab where dynamic HTML content is generated at runtime using document.writeln(). The third module captures selected values from a dropdown menu (<select>) and alerts the result on demand. Through this program, I learned how to handle user events with JavaScript, interact with DOM elements, validate user inputs, utilize built-in dialog boxes, and dynamically open and populate new browser windows.",
+  "output": "Summary of visual rendered layout and user interaction results"
 }
 Output ONLY the raw JSON object. Do not wrap in markdown or add conversational preamble.`;
       } else {

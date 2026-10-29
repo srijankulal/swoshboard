@@ -3708,6 +3708,178 @@ kbd {
   color: var(--text-secondary);
 }
 
+/* Manual Question Selection Box */
+.lab-manual-question-box {
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.question-box-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.question-manual-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.question-manual-link-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.question-manual-link-btn:hover {
+  text-decoration: underline;
+}
+
+.question-box-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.question-dropdown-row select {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 6px 8px;
+}
+
+.lab-question-input {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+}
+
+.lab-question-input:focus {
+  border-color: var(--primary);
+  background: var(--surface-solid);
+}
+
+.lab-record-section.question-section {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.lab-question-statement {
+  white-space: pre-wrap;
+  font-weight: 500;
+  color: var(--text-primary) !important;
+}
+
+.lab-concept-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lab-concept-list li {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.lab-concept-list li code {
+  color: var(--primary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sub-heading {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.lab-multifile-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lab-file-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-subtle);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: 'Consolas', monospace;
+}
+
+.lab-interpretation-text {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.lab-interpretation-text p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
 .lab-record-testcases {
   display: flex;
   flex-direction: column;

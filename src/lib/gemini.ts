@@ -29,6 +29,15 @@ export interface LabAnalysisResult {
     answer: string;
   }>;
   webFlow?: string;
+  tagsAndAttributes?: Array<{ name: string; description: string }>;
+  jsConcepts?: Array<{ name: string; description: string }>;
+  files?: Array<{ name: string; title?: string; code: string }>;
+}
+
+export interface ManualQuestion {
+  number: string;
+  title: string;
+  statement: string;
 }
 
 export class GeminiApiError extends Error {
